@@ -1,7 +1,8 @@
 import streamlit as st
 import database
 import auth
-import expenses  # add this import
+import expenses
+import dashboard          # ← add this import
 
 st.set_page_config(
     page_title="SpendWise",
@@ -38,16 +39,14 @@ else:
     if st.sidebar.button("Logout", use_container_width=True):
         auth.logout_user()
 
-    # ── Page rendering ────────────────────────────────────────────
     if page == "📊 Dashboard":
-        st.header("📊 Dashboard")
-        st.info("Coming in Phase 4 — charts and analytics will live here.")
+        dashboard.show_dashboard()             # ← replaced
 
     elif page == "➕ Add Expense":
-        expenses.show_add_expense_page()       # ← replaced
+        expenses.show_add_expense_page()
 
     elif page == "📋 My Expenses":
-        expenses.show_expenses_page()          # ← replaced
+        expenses.show_expenses_page()
 
     elif page == "⚙️ Settings":
         auth.show_settings_page()

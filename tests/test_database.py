@@ -200,3 +200,35 @@ def test_delete_other_users_expense_returns_false():
     # expense should still exist
     expenses = database.get_expenses(user1["id"])
     assert len(expenses) == 1
+
+
+def test_budgets_multiple_categories():
+    """Multiple category budgets should all be stored and retrieved."""
+    database.create_user("u13", "u13@example.com", "pw")
+    user = database.get_user_by_email("u13@example.com")
+    uid = user["id"]
+
+    categories = ["Food", "Travel", "Shopping", "Health"]
+    limits     = [5000.0, 3000.0, 4000.0, 1500.0]
+
+    for cat, limit in zip(categories, limits):
+        database.set_budget(uid, cat, limit, 6, 2025)
+
+    budgets = database.get_budgets(uid, 6, 2025)
+
+    for cat, limit in zip(categories, limits):
+        assert budgets[cat] == limit
+
+
+def test_expenses_sorted_most_recent_first():
+    """get_expenses should return newest expenses first."""
+    database.create_user("u14", "u14@example.com", "pw")
+    user = database.get_user_by_email("u14@example.com")
+    uid = user["id"]
+
+    database.add_expense(uid, 100.0, "Old", "Food", "2025-01-01")
+    database.add_expense(uid, 200.0, "New", "Food", "2025-06-15")
+
+    expenses = database.get_expenses(uid)
+    assert expenses[0]["description"] == "New"
+    assert expenses[1]["description"] == "Old"
