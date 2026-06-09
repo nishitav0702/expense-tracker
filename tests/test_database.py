@@ -98,3 +98,105 @@ def test_set_and_get_budget():
     database.set_budget(uid, "Food", 5000.0, 6, 2025)
     budgets = database.get_budgets(uid, 6, 2025)
     assert budgets["Food"] == 5000.0
+
+def test_password_hash_and_verify():
+    """Passwords should hash and verify correctly."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from auth import hash_password, verify_password
+
+    hashed = hash_password("mysecretpassword")
+
+    # Hash should not equal the original
+    assert hashed != "mysecretpassword"
+
+    # Correct password should verify
+    assert verify_password("mysecretpassword", hashed) is True
+
+    # Wrong password should not verify
+    assert verify_password("wrongpassword", hashed) is False
+
+
+def test_budget_persists_across_calls():
+    """Setting a budget and reading it back should return the same value."""
+    database.create_user("u6", "u6@example.com", "pw")
+    user = database.get_user_by_email("u6@example.com")
+    uid = user["id"]
+
+    database.set_budget(uid, "Travel", 3000.0, 6, 2025)
+    database.set_budget(uid, "Food", 5000.0, 6, 2025)
+
+    budgets = database.get_budgets(uid, 6, 2025)
+    assert budgets["Travel"] == 3000.0
+    assert budgets["Food"] == 5000.0
+
+
+def test_budget_update_overwrites():
+    """Updating a budget should overwrite, not duplicate."""
+    database.create_user("u7", "u7@example.com", "pw")
+    user = database.get_user_by_email("u7@example.com")
+    uid = user["id"]
+
+    database.set_budget(uid, "Food", 2000.0, 6, 2025)
+    database.set_budget(uid, "Food", 4500.0, 6, 2025)  # update same category
+
+    budgets = database.get_budgets(uid, 6, 2025)
+    assert budgets["Food"] == 4500.0  # should be the new value, not old
+
+def test_expense_date_filter():
+    """Only expenses within date range should be returned."""
+    database.create_user("u8", "u8@example.com", "pw")
+    user = database.get_user_by_email("u8@example.com")
+    uid = user["id"]
+
+    database.add_expense(uid, 100.0, "Jan expense", "Food", "2025-01-15")
+    database.add_expense(uid, 200.0, "Jun expense", "Food", "2025-06-15")
+
+    results = database.get_expenses(uid, from_date="2025-06-01", to_date="2025-06-30")
+    assert len(results) == 1
+    assert results[0]["description"] == "Jun expense"
+
+
+def test_expense_multi_category_filter():
+    """Filtering by multiple categories should return only those."""
+    database.create_user("u9", "u9@example.com", "pw")
+    user = database.get_user_by_email("u9@example.com")
+    uid = user["id"]
+
+    database.add_expense(uid, 100.0, "Food item",    "Food",    "2025-06-01")
+    database.add_expense(uid, 150.0, "Travel item",  "Travel",  "2025-06-01")
+    database.add_expense(uid, 200.0, "Health item",  "Health",  "2025-06-01")
+
+    results = database.get_expenses(uid, categories=["Food", "Travel"])
+    assert len(results) == 2
+    cats = [r["category"] for r in results]
+    assert "Health" not in cats
+
+
+def test_update_nonexistent_expense_returns_false():
+    """Updating an expense that doesn't exist should return False."""
+    database.create_user("u10", "u10@example.com", "pw")
+    user = database.get_user_by_email("u10@example.com")
+    uid = user["id"]
+
+    result = database.update_expense(99999, uid, 100.0, "ghost", "Food", "2025-06-01")
+    assert result is False
+
+
+def test_delete_other_users_expense_returns_false():
+    """A user should not be able to delete another user's expense."""
+    database.create_user("u11", "u11@example.com", "pw")
+    database.create_user("u12", "u12@example.com", "pw")
+    user1 = database.get_user_by_email("u11@example.com")
+    user2 = database.get_user_by_email("u12@example.com")
+
+    # user1 adds an expense
+    eid = database.add_expense(user1["id"], 300.0, "Mine", "Food", "2025-06-01")
+
+    # user2 tries to delete it — should fail
+    result = database.delete_expense(eid, user2["id"])
+    assert result is False
+
+    # expense should still exist
+    expenses = database.get_expenses(user1["id"])
+    assert len(expenses) == 1
