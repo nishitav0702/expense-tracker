@@ -3,8 +3,9 @@ import pandas as pd
 import datetime
 import database
 from auth import CATEGORIES
+from api_client import CURRENCIES, convert_to_inr
 
-# Consistent colour per category — used in the table badges
+# Consistent colour per category
 CATEGORY_COLOURS = {
     "Food":          "#FF6B6B",
     "Travel":        "#4ECDC4",
@@ -23,10 +24,6 @@ def load_expenses(user_id: int, from_date=None, to_date=None,
     """
     Fetch expenses from SQLite and return as a DataFrame.
     Empty DataFrame if no expenses yet.
-
-    Why DataFrame?
-    sqlite3.Row objects are hard to filter and display.
-    pandas gives us filtering, sorting, and groupby for free.
     """
     rows = database.get_expenses(
         user_id,
@@ -42,34 +39,24 @@ def load_expenses(user_id: int, from_date=None, to_date=None,
             "is_recurring", "created_at"
         ])
 
-    # Convert list of sqlite3.Row → list of dicts → DataFrame
     df = pd.DataFrame([dict(row) for row in rows])
-    df["date"] = pd.to_datetime(df["date"])   # string → datetime for sorting
+    df["date"] = pd.to_datetime(df["date"])
     return df
 
 
 # ── Add expense page ──────────────────────────────────────────────────────────
 
 def show_add_expense_page() -> None:
-    """
-    Render the Add Expense page.
-
-    Layout:
-    - Amount + description + date in a form
-    - Category buttons below (outside the form so they feel instant)
-    - On save: validate → insert → success message → clear inputs
-    """
     st.header("➕ Add Expense")
 
     user_id = st.session_state["user_id"]
 
-    # ── Input form ────────────────────────────────────────────────
     with st.form("add_expense_form", clear_on_submit=True):
         col1, col2 = st.columns([2, 1])
 
         with col1:
             amount = st.number_input(
-                "Amount (₹)",
+                "Amount",
                 min_value=0.01,
                 step=1.0,
                 format="%.2f",
@@ -86,25 +73,18 @@ def show_add_expense_page() -> None:
                 value=datetime.date.today(),
                 help="When did you spend this?"
             )
+            currency = st.selectbox(
+                "Currency",
+                CURRENCIES,
+                index=0,
+                help="Select currency — will be converted to INR"
+            )
             recurring = st.checkbox(
                 "Recurring expense",
                 help="E.g. Netflix, gym membership"
             )
 
         st.markdown("**Select category:**")
-
-        # Category buttons — 4 per row using columns
-        # We use session_state to track which category is selected
-        if "selected_category" not in st.session_state:
-            st.session_state["selected_category"] = None
-
-        # Display category buttons in a grid
-        cols = st.columns(4)
-        for i, cat in enumerate(CATEGORIES):
-            with cols[i % 4]:
-                st.write(f"**{cat}**")
-
-        # Selectbox as fallback (also used as the actual value)
         selected_category = st.selectbox(
             "Category",
             CATEGORIES,
@@ -117,41 +97,53 @@ def show_add_expense_page() -> None:
             type="primary"
         )
 
-    # ── Handle submission ─────────────────────────────────────────
     if submitted:
         if amount <= 0:
             st.error("Amount must be greater than zero.")
             return
 
-        # Check for anomaly BEFORE saving so z-score uses existing history
-        from ml_insights import check_anomaly
-        is_anomaly, z_score = check_anomaly(user_id, amount, selected_category)
+        # Convert to INR if needed
+        amount_inr, used_fallback = convert_to_inr(amount, currency)
 
-        expense_id = database.add_expense(
+        if used_fallback and currency != "INR":
+            st.warning(
+                "⚠️ Live exchange rates unavailable — "
+                "using approximate rates for conversion."
+            )
+
+        # Check for anomaly BEFORE saving
+        from ml_insights import check_anomaly
+        is_anomaly, z_score = check_anomaly(user_id, amount_inr, selected_category)
+
+        database.add_expense(
             user_id=user_id,
             amount=amount,
             description=description,
             category=selected_category,
             date=str(date),
-            currency="INR",
-            amount_inr=amount,
+            currency=currency,
+            amount_inr=amount_inr,
             is_recurring=int(recurring)
         )
 
-        st.success(
-            f"✅ ₹{amount:,.2f} added under **{selected_category}** "
-            f"on {date.strftime('%d %b %Y')}"
-        )
+        if currency != "INR":
+            st.success(
+                f"✅ {currency} {amount:,.2f} → ₹{amount_inr:,.2f} added "
+                f"under **{selected_category}** on {date.strftime('%d %b %Y')}"
+            )
+        else:
+            st.success(
+                f"✅ ₹{amount:,.2f} added under **{selected_category}** "
+                f"on {date.strftime('%d %b %Y')}"
+            )
 
-        # Show anomaly warning after saving
         if is_anomaly:
             cat_expenses = database.get_expenses(user_id, categories=[selected_category])
             if cat_expenses:
-                import pandas as pd
                 amounts = [r["amount_inr"] for r in cat_expenses]
                 avg = sum(amounts) / len(amounts)
                 st.warning(
-                    f"⚠️ This is **{amount / avg:.1f}x** your average "
+                    f"⚠️ This is **{amount_inr / avg:.1f}x** your average "
                     f"{selected_category} expense (avg ₹{avg:,.0f}). "
                     f"Looks unusual — double check this entry."
                 )
@@ -166,11 +158,10 @@ def show_add_expense_page() -> None:
         st.info("No expenses yet. Add your first one above!")
         return
 
-    # Show last 5 only in this preview
-    recent = df.head(5)[["date", "description", "category", "amount_inr"]].copy()
-    recent["date"] = recent["date"].dt.strftime("%d %b %Y")
+    recent = df.head(5)[["date", "description", "category", "amount_inr", "currency"]].copy()
+    recent["date"]       = recent["date"].dt.strftime("%d %b %Y")
     recent["amount_inr"] = recent["amount_inr"].apply(lambda x: f"₹{x:,.2f}")
-    recent.columns = ["Date", "Description", "Category", "Amount"]
+    recent.columns       = ["Date", "Description", "Category", "Amount (INR)", "Currency"]
 
     st.dataframe(recent, use_container_width=True, hide_index=True)
 
@@ -178,9 +169,6 @@ def show_add_expense_page() -> None:
 # ── My Expenses page ──────────────────────────────────────────────────────────
 
 def show_expenses_page() -> None:
-    """
-    Render the My Expenses page with filters, table, edit and delete.
-    """
     st.header("📋 My Expenses")
 
     user_id = st.session_state["user_id"]
@@ -191,13 +179,11 @@ def show_expenses_page() -> None:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        # Quick date range presets
         preset = st.selectbox(
             "Quick range",
             ["This month", "Last 7 days", "Last month", "All time", "Custom"]
         )
 
-    # Compute from/to dates based on preset
     if preset == "This month":
         from_date = today.replace(day=1)
         to_date   = today
@@ -212,7 +198,6 @@ def show_expenses_page() -> None:
         from_date = datetime.date(2000, 1, 1)
         to_date   = today
     else:
-        # Custom — show date pickers
         with col2:
             from_date = st.date_input("From", value=today.replace(day=1))
         with col3:
@@ -238,7 +223,7 @@ def show_expenses_page() -> None:
         st.info("No expenses found for the selected filters.")
         return
 
-    # ── Summary row above table ───────────────────────────────────
+    # ── Summary row ───────────────────────────────────────────────
     total = df["amount_inr"].sum()
     count = len(df)
     avg   = df["amount_inr"].mean()
@@ -250,14 +235,13 @@ def show_expenses_page() -> None:
 
     st.divider()
 
-    # ── Expense table with edit/delete ────────────────────────────
+    # ── Expense table ─────────────────────────────────────────────
     st.subheader("Transactions")
 
-    # Display table
     display_df = df[["date", "description", "category",
                       "amount_inr", "currency", "is_recurring"]].copy()
-    display_df["date"]        = display_df["date"].dt.strftime("%d %b %Y")
-    display_df["amount_inr"]  = display_df["amount_inr"].apply(lambda x: f"₹{x:,.2f}")
+    display_df["date"]         = display_df["date"].dt.strftime("%d %b %Y")
+    display_df["amount_inr"]   = display_df["amount_inr"].apply(lambda x: f"₹{x:,.2f}")
     display_df["is_recurring"] = display_df["is_recurring"].apply(
         lambda x: "🔁 Yes" if x else ""
     )
@@ -266,12 +250,11 @@ def show_expenses_page() -> None:
 
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    # ── Edit / Delete section ─────────────────────────────────────
+    # ── Edit / Delete ─────────────────────────────────────────────
     st.divider()
     st.subheader("Edit or delete an expense")
-    st.caption("Select an expense by its row number to edit or delete it.")
+    st.caption("Select an expense to edit or delete it.")
 
-    # Build a readable label for each expense for the selectbox
     expense_labels = {
         row["id"]: (
             f"{pd.to_datetime(row['date']).strftime('%d %b')}  |  "
@@ -292,13 +275,12 @@ def show_expenses_page() -> None:
 
         tab_edit, tab_delete = st.tabs(["✏️ Edit", "🗑️ Delete"])
 
-        # ── Edit tab ──────────────────────────────────────────────
         with tab_edit:
             with st.form("edit_form"):
                 col1, col2 = st.columns(2)
                 with col1:
                     new_amount = st.number_input(
-                        "Amount (₹)",
+                        "Amount",
                         value=float(selected_row["amount_inr"]),
                         min_value=0.01,
                         step=1.0
@@ -318,9 +300,16 @@ def show_expenses_page() -> None:
                         index=CATEGORIES.index(selected_row["category"])
                         if selected_row["category"] in CATEGORIES else 0
                     )
+                    new_currency = st.selectbox(
+                        "Currency",
+                        CURRENCIES,
+                        index=CURRENCIES.index(selected_row["currency"])
+                        if selected_row["currency"] in CURRENCIES else 0
+                    )
                 save_edit = st.form_submit_button("Save changes", type="primary")
 
             if save_edit:
+                new_amount_inr, _ = convert_to_inr(new_amount, new_currency)
                 updated = database.update_expense(
                     expense_id=int(selected_id),
                     user_id=user_id,
@@ -328,7 +317,8 @@ def show_expenses_page() -> None:
                     description=new_desc,
                     category=new_cat,
                     date=str(new_date),
-                    amount_inr=new_amount
+                    currency=new_currency,
+                    amount_inr=new_amount_inr
                 )
                 if updated:
                     st.success("Expense updated successfully.")
@@ -336,7 +326,6 @@ def show_expenses_page() -> None:
                 else:
                     st.error("Could not update — please try again.")
 
-        # ── Delete tab ────────────────────────────────────────────
         with tab_delete:
             st.warning(
                 f"You are about to delete: **{selected_row['category']}** — "

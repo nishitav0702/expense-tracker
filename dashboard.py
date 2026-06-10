@@ -5,10 +5,8 @@ import datetime
 import database
 from expenses import load_expenses
 from auth import CATEGORIES
+from email_alerts import check_and_alert
 
-# ── Consistent category colours across every chart ────────────────────────────
-# Pass this to every Plotly chart's color_discrete_map argument.
-# This means Food is always red, Travel always teal — looks designed.
 COLOUR_MAP = {
     "Food":          "#FF6B6B",
     "Travel":        "#4ECDC4",
@@ -20,17 +18,7 @@ COLOUR_MAP = {
 }
 
 
-# ── Helper — get date range for a given month ─────────────────────────────────
-
 def get_month_range(month_offset: int = 0):
-    """
-    Return (from_date, to_date) for a given month.
-    month_offset=0  → this month
-    month_offset=-1 → last month
-
-    Centralising date arithmetic here means every other function
-    just calls get_month_range(0) instead of rewriting 6 lines.
-    """
     today = datetime.date.today()
     month = today.month + month_offset
     year  = today.year
@@ -49,28 +37,17 @@ def get_month_range(month_offset: int = 0):
     else:
         to_date = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
 
-    # Never show future dates
     to_date = min(to_date, today)
-
     return from_date, to_date
 
 
-# ── Main dashboard ────────────────────────────────────────────────────────────
-
 def show_dashboard() -> None:
-    """
-    Render the full dashboard.
-    Order:
-    1. Overspend warning banners
-    2. Three metric cards
-    3. Pie chart + budget progress bars side by side
-    4. Daily spending line chart
-    5. This month vs last month bar chart
-    """
     st.header("📊 Dashboard")
 
-    user_id = st.session_state["user_id"]
-    today   = datetime.date.today()
+    user_id  = st.session_state["user_id"]
+    email    = st.session_state.get("email", "")
+    username = st.session_state.get("username", "")
+    today    = datetime.date.today()
 
     from_date, to_date = get_month_range(0)
     df_this  = load_expenses(user_id, from_date=from_date, to_date=to_date)
@@ -80,15 +57,21 @@ def show_dashboard() -> None:
 
     budgets  = database.get_budgets(user_id, today.month, today.year)
 
-    # 1 — warnings always at top
+    # ── Email alerts ──────────────────────────────────────────────
+    if email and username:
+        triggered = check_and_alert(user_id, email, username)
+        for cat in triggered:
+            st.toast(f"📧 Budget alert sent for {cat}", icon="✉️")
+
+    # ── 1. Overspend warnings ─────────────────────────────────────
     _show_budget_warnings(df_this, budgets)
 
-    # 2 — metric cards
+    # ── 2. Metric cards ───────────────────────────────────────────
     _show_metric_cards(df_this, budgets)
 
     st.divider()
 
-    # 3 — pie + budget bars
+    # ── 3. Pie + budget bars ──────────────────────────────────────
     if not df_this.empty:
         col_left, col_right = st.columns([1.2, 1])
         with col_left:
@@ -101,25 +84,16 @@ def show_dashboard() -> None:
 
     st.divider()
 
-    # 4 — line chart
+    # ── 4. Line chart ─────────────────────────────────────────────
     _show_line_chart(df_this, from_date, to_date)
 
     st.divider()
 
-    # 5 — comparison bar chart
+    # ── 5. Comparison bar chart ───────────────────────────────────
     _show_comparison_chart(df_this, df_last)
 
 
-# ── Section renderers ─────────────────────────────────────────────────────────
-# Each chart is its own private function.
-# Why? If the pie chart breaks you know exactly where to look.
-# Each function does one thing and nothing else.
-
 def _show_budget_warnings(df: pd.DataFrame, budgets: dict) -> None:
-    """
-    Warning at 80%+, error at 100%+.
-    Runs before everything else so it's always visible at top of page.
-    """
     if df.empty or not budgets:
         return
 
@@ -144,10 +118,6 @@ def _show_budget_warnings(df: pd.DataFrame, budgets: dict) -> None:
 
 
 def _show_metric_cards(df: pd.DataFrame, budgets: dict) -> None:
-    """
-    Three st.metric() cards:
-    total spent | budget remaining | top category
-    """
     total_spent  = df["amount_inr"].sum() if not df.empty else 0
     total_budget = sum(budgets.values())
     remaining    = total_budget - total_spent
@@ -162,32 +132,17 @@ def _show_metric_cards(df: pd.DataFrame, budgets: dict) -> None:
         top_cat = "—"
 
     col1, col2, col3 = st.columns(3)
-
-    col1.metric(
-        label="Spent this month",
-        value=f"₹{total_spent:,.0f}"
-    )
+    col1.metric("Spent this month", f"₹{total_spent:,.0f}")
     col2.metric(
-        label="Budget remaining",
-        value=f"₹{remaining:,.0f}",
+        "Budget remaining",
+        f"₹{remaining:,.0f}",
         delta=f"of ₹{total_budget:,.0f} total" if total_budget > 0 else "No budget set",
         delta_color="off"
     )
-    col3.metric(
-        label="Top category",
-        value=top_cat
-    )
+    col3.metric("Top category", top_cat)
 
 
 def _show_pie_chart(df: pd.DataFrame) -> None:
-    """
-    Donut chart — % of total spending per category.
-
-    groupby + reset_index converts the DataFrame into the shape
-    Plotly Express expects: a regular DataFrame with named columns.
-    Without reset_index(), groupby returns a Series with category
-    as the index — px.pie() can't use that directly.
-    """
     st.subheader("Spending by category")
 
     category_totals = (
@@ -214,18 +169,10 @@ def _show_pie_chart(df: pd.DataFrame) -> None:
         margin=dict(t=20, b=20, l=0, r=0),
         height=320
     )
-
     st.plotly_chart(fig, use_container_width=True)
 
 
 def _show_budget_progress(df: pd.DataFrame, budgets: dict) -> None:
-    """
-    Progress bar per category.
-    Green < 60% | Orange 60-85% | Red > 85%
-
-    min(spent/limit, 1.0) caps the value at 1.0 —
-    st.progress() throws an error above 1.0 so this is required.
-    """
     st.subheader("Budget usage")
 
     if not budgets:
@@ -259,14 +206,6 @@ def _show_budget_progress(df: pd.DataFrame, budgets: dict) -> None:
 def _show_line_chart(df: pd.DataFrame,
                      from_date: datetime.date,
                      to_date: datetime.date) -> None:
-    """
-    Line chart — daily spending across the current month.
-
-    The key pandas trick here is reindex(all_days, fill_value=0).
-    Without it, days with no spending are simply absent from the
-    grouped data — the chart has gaps. Reindexing fills those days
-    with 0 so the line is continuous.
-    """
     st.subheader("Daily spending this month")
 
     all_days = pd.date_range(start=from_date, end=to_date, freq="D")
@@ -291,25 +230,12 @@ def _show_line_chart(df: pd.DataFrame,
         height=280,
         hovermode="x unified"
     )
-    fig.update_traces(
-        hovertemplate="₹%{y:,.0f}"
-    )
-
+    fig.update_traces(hovertemplate="₹%{y:,.0f}")
     st.plotly_chart(fig, use_container_width=True)
 
 
 def _show_comparison_chart(df_this: pd.DataFrame,
                             df_last: pd.DataFrame) -> None:
-    """
-    Grouped bar chart — this month vs last month per category.
-
-    Steps:
-    1. Compute totals per category for each month separately
-    2. Add a "Month" label column to each
-    3. pd.concat() stacks them into one DataFrame
-    4. barmode="group" tells Plotly to place bars side by side
-       using the "Month" column as the grouping key
-    """
     st.subheader("This month vs last month")
 
     def make_totals(df: pd.DataFrame, label: str) -> pd.DataFrame:
@@ -350,8 +276,5 @@ def _show_comparison_chart(df_this: pd.DataFrame,
         height=320,
         legend=dict(orientation="h", yanchor="bottom", y=1.02)
     )
-    fig.update_traces(
-        hovertemplate="<b>%{x}</b><br>₹%{y:,.0f}"
-    )
-
+    fig.update_traces(hovertemplate="<b>%{x}</b><br>₹%{y:,.0f}")
     st.plotly_chart(fig, use_container_width=True)

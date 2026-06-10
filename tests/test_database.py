@@ -292,3 +292,38 @@ def test_anomaly_flagged_for_extreme_amount():
     is_anomaly, z = check_anomaly(uid, 50000.0, "Food")
     assert is_anomaly is True
     assert z > 2.0
+
+def test_convert_inr_to_inr():
+    """INR to INR conversion should return the same amount."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+    # Mock session_state so api_client doesn't crash outside Streamlit
+    import unittest.mock as mock
+    with mock.patch("streamlit.session_state", {}):
+        from api_client import convert_to_inr
+        amount, fallback = convert_to_inr(500.0, "INR")
+        assert amount == 500.0
+
+
+def test_fallback_rates_cover_all_currencies():
+    """Every supported currency should have a fallback rate."""
+    from api_client import CURRENCIES, FALLBACK_RATES
+    for currency in CURRENCIES:
+        assert currency in FALLBACK_RATES, f"{currency} missing from FALLBACK_RATES"
+
+
+def test_email_skips_without_credentials(monkeypatch):
+    """Email send should return False gracefully when no credentials set."""
+    import email_alerts
+    monkeypatch.setattr(email_alerts, "GMAIL_ADDRESS", "")
+    monkeypatch.setattr(email_alerts, "GMAIL_APP_PASSWORD", "")
+
+    result = email_alerts.send_budget_exceeded_email(
+        to_email="test@example.com",
+        username="testuser",
+        category="Food",
+        spent=6000.0,
+        budget=5000.0
+    )
+    assert result is False
