@@ -232,3 +232,5 @@ def test_expenses_sorted_most_recent_first():
     expenses = database.get_expenses(uid)
     assert expenses[0]["description"] == "New"
     assert expenses[1]["description"] == "Old"
+
+

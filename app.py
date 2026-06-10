@@ -2,7 +2,7 @@ import streamlit as st
 import database
 import auth
 import expenses
-import dashboard          # ← add this import
+import dashboard          # ← add this
 
 st.set_page_config(
     page_title="SpendWise",
