@@ -123,6 +123,10 @@ def show_add_expense_page() -> None:
             st.error("Amount must be greater than zero.")
             return
 
+        # Check for anomaly BEFORE saving so z-score uses existing history
+        from ml_insights import check_anomaly
+        is_anomaly, z_score = check_anomaly(user_id, amount, selected_category)
+
         expense_id = database.add_expense(
             user_id=user_id,
             amount=amount,
@@ -138,6 +142,19 @@ def show_add_expense_page() -> None:
             f"✅ ₹{amount:,.2f} added under **{selected_category}** "
             f"on {date.strftime('%d %b %Y')}"
         )
+
+        # Show anomaly warning after saving
+        if is_anomaly:
+            cat_expenses = database.get_expenses(user_id, categories=[selected_category])
+            if cat_expenses:
+                import pandas as pd
+                amounts = [r["amount_inr"] for r in cat_expenses]
+                avg = sum(amounts) / len(amounts)
+                st.warning(
+                    f"⚠️ This is **{amount / avg:.1f}x** your average "
+                    f"{selected_category} expense (avg ₹{avg:,.0f}). "
+                    f"Looks unusual — double check this entry."
+                )
 
     # ── Recent expenses preview ───────────────────────────────────
     st.divider()

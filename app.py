@@ -2,7 +2,8 @@ import streamlit as st
 import database
 import auth
 import expenses
-import dashboard          # ← add this
+import dashboard
+import ml_insights          # ← add this
 
 st.set_page_config(
     page_title="SpendWise",
@@ -32,6 +33,7 @@ else:
         "📊 Dashboard",
         "➕ Add Expense",
         "📋 My Expenses",
+        "🤖 ML Insights",       # ← add this
         "⚙️ Settings"
     ])
 
@@ -40,13 +42,16 @@ else:
         auth.logout_user()
 
     if page == "📊 Dashboard":
-        dashboard.show_dashboard()             # ← replaced
+        dashboard.show_dashboard()
 
     elif page == "➕ Add Expense":
         expenses.show_add_expense_page()
 
     elif page == "📋 My Expenses":
         expenses.show_expenses_page()
+
+    elif page == "🤖 ML Insights":
+        ml_insights.show_ml_insights_page()    # ← add this
 
     elif page == "⚙️ Settings":
         auth.show_settings_page()

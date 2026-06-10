@@ -233,4 +233,62 @@ def test_expenses_sorted_most_recent_first():
     assert expenses[0]["description"] == "New"
     assert expenses[1]["description"] == "Old"
 
+def test_has_enough_data_false_when_empty():
+    """ML guard should return False when user has no expenses."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from ml_insights import has_enough_data
 
+    database.create_user("u15", "u15@example.com", "pw")
+    user = database.get_user_by_email("u15@example.com")
+    uid  = user["id"]
+
+    assert has_enough_data(uid) is False
+
+
+def test_has_enough_data_true_after_ten():
+    """ML guard should return True when user has 10+ expenses."""
+    from ml_insights import has_enough_data
+
+    database.create_user("u16", "u16@example.com", "pw")
+    user = database.get_user_by_email("u16@example.com")
+    uid  = user["id"]
+
+    for i in range(10):
+        database.add_expense(uid, 100.0, f"exp{i}", "Food", "2025-06-01")
+
+    assert has_enough_data(uid) is True
+
+
+def test_anomaly_not_flagged_with_little_history():
+    """Anomaly check should not flag when fewer than 5 expenses exist."""
+    from ml_insights import check_anomaly
+
+    database.create_user("u17", "u17@example.com", "pw")
+    user = database.get_user_by_email("u17@example.com")
+    uid  = user["id"]
+
+    # Only 3 expenses — below the 5 minimum for anomaly detection
+    for i in range(3):
+        database.add_expense(uid, 100.0, f"exp{i}", "Food", "2025-06-01")
+
+    is_anomaly, z = check_anomaly(uid, 500.0, "Food")
+    assert is_anomaly is False
+
+
+def test_anomaly_flagged_for_extreme_amount():
+    """A very large expense should be flagged as an anomaly."""
+    from ml_insights import check_anomaly
+
+    database.create_user("u18", "u18@example.com", "pw")
+    user = database.get_user_by_email("u18@example.com")
+    uid  = user["id"]
+
+    # Normal expenses around ₹100
+    for i in range(10):
+        database.add_expense(uid, 100.0 + i, f"normal{i}", "Food", "2025-06-01")
+
+    # ₹50000 should be flagged as extreme
+    is_anomaly, z = check_anomaly(uid, 50000.0, "Food")
+    assert is_anomaly is True
+    assert z > 2.0
