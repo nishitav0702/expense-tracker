@@ -327,3 +327,46 @@ def test_email_skips_without_credentials(monkeypatch):
         budget=5000.0
     )
     assert result is False
+
+def test_csv_export_returns_bytes():
+    """CSV export should return non-empty bytes for a user with expenses."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from export import get_csv_bytes
+
+    database.create_user("u19", "u19@example.com", "pw")
+    user = database.get_user_by_email("u19@example.com")
+    uid  = user["id"]
+
+    database.add_expense(uid, 300.0, "Test", "Food", "2025-06-01")
+    result = get_csv_bytes(uid)
+
+    assert isinstance(result, bytes)
+    assert len(result) > 0
+
+
+def test_csv_export_empty_for_no_expenses():
+    """CSV export should return empty bytes when user has no expenses."""
+    from export import get_csv_bytes
+
+    database.create_user("u20", "u20@example.com", "pw")
+    user = database.get_user_by_email("u20@example.com")
+    uid  = user["id"]
+
+    result = get_csv_bytes(uid)
+    assert result == b""
+
+
+def test_pdf_export_returns_bytes():
+    """PDF export should return non-empty bytes."""
+    from export import get_pdf_bytes
+
+    database.create_user("u21", "u21@example.com", "pw")
+    user = database.get_user_by_email("u21@example.com")
+    uid  = user["id"]
+
+    database.add_expense(uid, 500.0, "Dinner", "Food", "2025-06-01")
+    result = get_pdf_bytes(uid, ai_summary="Test AI summary.")
+
+    assert isinstance(result, bytes)
+    assert len(result) > 0

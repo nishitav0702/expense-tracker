@@ -3,7 +3,9 @@ import database
 import auth
 import expenses
 import dashboard
-import ml_insights          # ← add this
+import ml_insights
+import ai_insights        # ← add
+import export             # ← add
 
 st.set_page_config(
     page_title="SpendWise",
@@ -33,7 +35,9 @@ else:
         "📊 Dashboard",
         "➕ Add Expense",
         "📋 My Expenses",
-        "🤖 ML Insights",       # ← add this
+        "🤖 ML Insights",
+        "✨ AI Insights",       # ← add
+        "📁 Export",            # ← add
         "⚙️ Settings"
     ])
 
@@ -51,7 +55,13 @@ else:
         expenses.show_expenses_page()
 
     elif page == "🤖 ML Insights":
-        ml_insights.show_ml_insights_page()    # ← add this
+        ml_insights.show_ml_insights_page()
+
+    elif page == "✨ AI Insights":
+        ai_insights.show_ai_page()             # ← add
+
+    elif page == "📁 Export":
+        export.show_export_page()              # ← add
 
     elif page == "⚙️ Settings":
         auth.show_settings_page()
