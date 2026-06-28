@@ -46,7 +46,7 @@ def engineer_features(user_id: int, month: int, year: int) -> pd.DataFrame:
     if month == 12:
         days_in_month = 31
     else:
-        last_day = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
+        last_day      = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
         days_in_month = last_day.day
 
     if month == today.month and year == today.year:
@@ -61,6 +61,7 @@ def engineer_features(user_id: int, month: int, year: int) -> pd.DataFrame:
         today if (month == today.month and year == today.year)
         else datetime.date(year, month, days_in_month)
     )
+
     df      = load_expenses(user_id, from_date=from_date, to_date=to_date)
     budgets = database.get_budgets(user_id, month, year)
 
@@ -216,7 +217,7 @@ def forecast_month_spend(user_id: int) -> dict:
             continue
 
         cat_df["date"] = pd.to_datetime(cat_df["date"])
-        daily = cat_df.groupby(cat_df["date"].dt.day)["amount_inr"].sum()
+        daily  = cat_df.groupby(cat_df["date"].dt.day)["amount_inr"].sum()
         days   = np.array(daily.index).reshape(-1, 1)
         cumsum = np.cumsum(daily.values)
 
@@ -248,21 +249,13 @@ def check_anomaly(user_id: int, amount: float,
     return is_anomaly, round(z, 2)
 
 
-# ── Blind spot detection — fixed ──────────────────────────────────────────────
+# ── Blind spot detection ──────────────────────────────────────────────────────
 
 def find_blind_spot(user_id: int) -> dict:
-    """
-    Returns a dict with:
-    - worst_category: category name or None
-    - overspend_counts: {category: months_over_budget}
-    - monthly_summary: list of {month_label, category, spent, budget, over}
-    Looks at past 6 months INCLUDING current month.
-    """
     today           = datetime.date.today()
     overspend_count = {cat: 0 for cat in CATEGORIES}
     monthly_summary = []
 
-    # Include current month (offset 0) and past 5 (offsets 1-5)
     for offset in range(0, 6):
         month = today.month - offset
         year  = today.year
@@ -298,25 +291,18 @@ def find_blind_spot(user_id: int) -> dict:
     )
 
     return {
-        "worst_category":  worst,
+        "worst_category":   worst,
         "overspend_counts": overspend_count,
-        "monthly_summary": monthly_summary,
-        "max_count":       max_count
+        "monthly_summary":  monthly_summary,
+        "max_count":        max_count
     }
 
 
 # ── Spending trend charts ─────────────────────────────────────────────────────
 
 def _show_spending_trends(user_id: int) -> None:
-    """
-    Interactive spending trend charts.
-    User can toggle: Weekly / Monthly view
-    User can select which categories to show
-    Budget line shown on chart
-    """
     st.subheader("📈 Spending trends")
 
-    # ── Controls row ──────────────────────────────────────────────
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col1:
@@ -341,13 +327,12 @@ def _show_spending_trends(user_id: int) -> None:
         st.info("Select at least one category to view trends.")
         return
 
-    # ── Load all data ─────────────────────────────────────────────
     today     = datetime.date.today()
-    # Load 3 months of data
-    from_date = datetime.date(today.year, today.month - 2 if today.month > 2
-                              else today.month + 10, 1)
-    if today.month <= 2:
-        from_date = datetime.date(today.year - 1, from_date.month, 1)
+    from_date = datetime.date(
+        today.year if today.month > 2 else today.year - 1,
+        today.month - 2 if today.month > 2 else today.month + 10,
+        1
+    )
 
     df = load_expenses(user_id, from_date=from_date, to_date=today)
 
@@ -362,34 +347,38 @@ def _show_spending_trends(user_id: int) -> None:
         st.info("No data for selected categories.")
         return
 
-    # ── Build chart data ──────────────────────────────────────────
+    # ── Build chart data — sorted chronologically ─────────────────
     if view_mode == "Weekly":
-        # Group by ISO week + category
-        df["week"] = df["date"].dt.to_period("W").apply(
+        df["week_period"] = df["date"].dt.to_period("W")
+        df["week_label"]  = df["date"].dt.to_period("W").apply(
             lambda r: r.start_time.strftime("%d %b")
         )
         grouped = (
-            df.groupby(["week", "category"])["amount_inr"]
+            df.groupby(["week_period", "week_label", "category"])["amount_inr"]
             .sum()
             .reset_index()
         )
+        grouped = grouped.sort_values("week_period")
+        grouped = grouped.drop(columns=["week_period"])
         grouped.columns = ["Period", "Category", "Amount"]
         x_label = "Week starting"
 
     else:
-        # Group by month + category
-        df["month"] = df["date"].dt.to_period("M").apply(
+        df["month_period"] = df["date"].dt.to_period("M")
+        df["month_label"]  = df["date"].dt.to_period("M").apply(
             lambda r: r.start_time.strftime("%b %Y")
         )
         grouped = (
-            df.groupby(["month", "category"])["amount_inr"]
+            df.groupby(["month_period", "month_label", "category"])["amount_inr"]
             .sum()
             .reset_index()
         )
+        grouped = grouped.sort_values("month_period")
+        grouped = grouped.drop(columns=["month_period"])
         grouped.columns = ["Period", "Category", "Amount"]
         x_label = "Month"
 
-    # ── Main bar chart ────────────────────────────────────────────
+    # ── Grouped bar chart ─────────────────────────────────────────
     fig = px.bar(
         grouped,
         x="Period",
@@ -404,25 +393,20 @@ def _show_spending_trends(user_id: int) -> None:
     # ── Budget lines ──────────────────────────────────────────────
     if show_budget:
         budgets = database.get_budgets(user_id, today.month, today.year)
+        periods = grouped["Period"].unique().tolist()
 
-        # For monthly view — draw a horizontal budget line per category
         if view_mode == "Monthly" and budgets:
-            periods = grouped["Period"].unique().tolist()
-
             for cat in selected_cats:
                 limit = budgets.get(cat, 0)
                 if limit <= 0:
                     continue
-
-                colour = COLOUR_MAP.get(cat, "#888888")
-
                 fig.add_trace(go.Scatter(
                     x=periods,
                     y=[limit] * len(periods),
                     mode="lines",
                     name=f"{cat} budget",
                     line=dict(
-                        color=colour,
+                        color=COLOUR_MAP.get(cat, "#888888"),
                         width=1.5,
                         dash="dash"
                     ),
@@ -430,37 +414,33 @@ def _show_spending_trends(user_id: int) -> None:
                     hovertemplate=f"{cat} budget: Rs{limit:,.0f}<extra></extra>"
                 ))
 
-        # For weekly view — show monthly budget divided by ~4.3 as weekly target
         elif view_mode == "Weekly" and budgets:
-            periods = grouped["Period"].unique().tolist()
-
             for cat in selected_cats:
                 limit = budgets.get(cat, 0)
                 if limit <= 0:
                     continue
-
                 weekly_target = round(limit / 4.3, 0)
-                colour        = COLOUR_MAP.get(cat, "#888888")
-
                 fig.add_trace(go.Scatter(
                     x=periods,
                     y=[weekly_target] * len(periods),
                     mode="lines",
                     name=f"{cat} weekly target",
                     line=dict(
-                        color=colour,
+                        color=COLOUR_MAP.get(cat, "#888888"),
                         width=1.5,
                         dash="dot"
                     ),
                     opacity=0.7,
                     hovertemplate=(
-                        f"{cat} weekly target: Rs{weekly_target:,.0f}<extra></extra>"
+                        f"{cat} weekly target: "
+                        f"Rs{weekly_target:,.0f}<extra></extra>"
                     )
                 ))
 
     fig.update_layout(
         margin=dict(t=30, b=20, l=0, r=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom",
+                    y=1.02, xanchor="right", x=1),
         hovermode="x unified",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -471,19 +451,13 @@ def _show_spending_trends(user_id: int) -> None:
         selector=dict(type="bar"),
         hovertemplate="<b>%{x}</b><br>Rs%{y:,.0f}"
     )
-
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── Line chart for trend over time ────────────────────────────
+    # ── Line chart ────────────────────────────────────────────────
     st.caption("Spending trend over time per category")
 
-    if view_mode == "Weekly":
-        trend_df = grouped.copy()
-    else:
-        trend_df = grouped.copy()
-
     fig2 = px.line(
-        trend_df,
+        grouped,
         x="Period",
         y="Amount",
         color="Category",
@@ -498,13 +472,16 @@ def _show_spending_trends(user_id: int) -> None:
         hovermode="x unified",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(showgrid=False),
+        xaxis=dict(
+            showgrid=False,
+            categoryorder="array",
+            categoryarray=grouped["Period"].unique().tolist()
+        ),
         yaxis=dict(gridcolor="rgba(200,200,200,0.1)"),
     )
     fig2.update_traces(
         hovertemplate="<b>%{fullData.name}</b>: Rs%{y:,.0f}"
     )
-
     st.plotly_chart(fig2, use_container_width=True)
 
 
@@ -529,12 +506,13 @@ def show_ml_insights_page() -> None:
     # ── Retrain button ────────────────────────────────────────────
     col_title, col_btn = st.columns([4, 1])
     with col_btn:
-        if st.button("🔄 Retrain model", help="Retrain on your latest data"):
+        if st.button("🔄 Retrain model",
+                     help="Retrain on your latest data"):
             train_risk_model(user_id)
             st.success("Model retrained!")
             st.rerun()
 
-    # ── Spending trends (new) ─────────────────────────────────────
+    # ── Spending trends ───────────────────────────────────────────
     _show_spending_trends(user_id)
 
     st.divider()
@@ -565,7 +543,7 @@ def show_ml_insights_page() -> None:
 
     st.divider()
 
-    # ── Spend forecast ────────────────────────────────────────────
+    # ── Forecast ──────────────────────────────────────────────────
     st.subheader("🔮 Month-end forecast")
     st.caption(
         "Linear Regression on your daily spend trend — "
@@ -576,7 +554,7 @@ def show_ml_insights_page() -> None:
     today     = datetime.date.today()
     budgets   = database.get_budgets(user_id, today.month, today.year)
 
-    # Forecast bar chart — predicted vs budget
+    # Forecast bar chart
     forecast_rows = []
     for cat in CATEGORIES:
         predicted = forecasts.get(cat, 0.0)
@@ -609,7 +587,8 @@ def show_ml_insights_page() -> None:
                 "Budget":    "#444444"
             },
             labels={"Amount": "Amount (Rs)"},
-            height=320
+            height=320,
+            text_auto=",.0f"
         )
         fig3.update_layout(
             margin=dict(t=10, b=20, l=0, r=0),
@@ -620,11 +599,13 @@ def show_ml_insights_page() -> None:
             yaxis=dict(gridcolor="rgba(200,200,200,0.1)"),
         )
         fig3.update_traces(
+            textposition="outside",
+            textfont=dict(size=9),
             hovertemplate="<b>%{x}</b><br>Rs%{y:,.0f}"
         )
         st.plotly_chart(fig3, use_container_width=True)
 
-    # Metric cards below chart
+    # Metric cards
     cols = st.columns(3)
     for i, category in enumerate(CATEGORIES):
         predicted = forecasts.get(category, 0.0)
@@ -652,16 +633,16 @@ def show_ml_insights_page() -> None:
 
     st.divider()
 
-    # ── Blind spot — fixed ────────────────────────────────────────
+    # ── Blind spot ────────────────────────────────────────────────
     st.subheader("📍 Your spending blind spot")
 
-    result      = find_blind_spot(user_id)
-    worst       = result["worst_category"]
-    counts      = result["overspend_counts"]
-    summary     = result["monthly_summary"]
-    max_count   = result["max_count"]
+    result    = find_blind_spot(user_id)
+    worst     = result["worst_category"]
+    counts    = result["overspend_counts"]
+    summary   = result["monthly_summary"]
+    max_count = result["max_count"]
 
-    risk_df_now = predict_risk(user_id)
+    risk_df_now        = predict_risk(user_id)
     current_overbudget = risk_df_now[
         (risk_df_now["risk_label"] == "Danger") &
         (risk_df_now["budget"] > 0)
@@ -675,33 +656,50 @@ def show_ml_insights_page() -> None:
             f"out of the last 6."
         )
 
-        # Show overspend history as a small bar chart
         if summary:
-            sdf = pd.DataFrame(summary)
+            sdf       = pd.DataFrame(summary)
             sdf_worst = sdf[sdf["category"] == worst]
 
             if not sdf_worst.empty:
+                # Sort chronologically
+                sdf_worst = sdf_worst.copy()
+                sdf_worst["month_dt"] = pd.to_datetime(
+                    sdf_worst["month"], format="%b %Y"
+                )
+                sdf_worst = sdf_worst.sort_values("month_dt")
+
                 fig4 = px.bar(
                     sdf_worst,
                     x="month",
                     y="over_by",
                     color_discrete_sequence=["#FF6B6B"],
-                    labels={"over_by": "Over budget by (Rs)", "month": "Month"},
+                    labels={
+                        "over_by": "Over budget by (Rs)",
+                        "month":   "Month"
+                    },
                     title=f"{worst} — monthly overspend history",
-                    height=250
+                    height=250,
+                    text_auto=",.0f",
+                    category_orders={
+                        "month": sdf_worst["month"].tolist()
+                    }
                 )
                 fig4.update_layout(
                     margin=dict(t=40, b=20, l=0, r=0),
                     plot_bgcolor="rgba(0,0,0,0)",
                     paper_bgcolor="rgba(0,0,0,0)",
-                    showlegend=False
+                    showlegend=False,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(gridcolor="rgba(200,200,200,0.1)")
                 )
                 fig4.update_traces(
+                    textposition="outside",
+                    textfont=dict(size=9),
                     hovertemplate="<b>%{x}</b><br>Over by Rs%{y:,.0f}"
                 )
                 st.plotly_chart(fig4, use_container_width=True)
 
-        # Overspend counts for all categories
+        # All categories overspend count
         count_df = pd.DataFrame([
             {"Category": cat, "Months over budget": cnt}
             for cat, cnt in counts.items()
@@ -716,13 +714,20 @@ def show_ml_insights_page() -> None:
                 y="Months over budget",
                 color="Category",
                 color_discrete_map=COLOUR_MAP,
-                height=220
+                height=220,
+                text_auto=True
             )
             fig5.update_layout(
                 margin=dict(t=10, b=20, l=0, r=0),
                 showlegend=False,
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(showgrid=False),
+                yaxis=dict(gridcolor="rgba(200,200,200,0.1)")
+            )
+            fig5.update_traces(
+                textposition="outside",
+                textfont=dict(size=10)
             )
             st.plotly_chart(fig5, use_container_width=True)
 
