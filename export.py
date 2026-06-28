@@ -13,20 +13,14 @@ from auth import CATEGORIES
 
 def get_csv_bytes(user_id: int, from_date=None, to_date=None,
                   categories=None) -> bytes:
-    """
-    Convert expenses to CSV bytes for download.
-    io.BytesIO = in-memory file, no disk write needed.
-    """
     df = load_expenses(user_id, from_date=from_date,
                        to_date=to_date, categories=categories)
-
     if df.empty:
         return b""
 
     export_df = df[["date", "description", "category",
                     "amount", "currency", "amount_inr",
                     "is_recurring", "created_at"]].copy()
-
     export_df["date"]         = export_df["date"].dt.strftime("%Y-%m-%d")
     export_df["is_recurring"] = export_df["is_recurring"].apply(
         lambda x: "Yes" if x else "No"
@@ -36,31 +30,18 @@ def get_csv_bytes(user_id: int, from_date=None, to_date=None,
         "Amount", "Currency", "Amount (INR)",
         "Recurring", "Added At"
     ]
-
     buffer = io.BytesIO()
     export_df.to_csv(buffer, index=False, encoding="utf-8")
     return buffer.getvalue()
 
 
-# ── PDF export ────────────────────────────────────────────────────────────────
+# ── PDF helpers ───────────────────────────────────────────────────────────────
 
 def _safe(text: str) -> str:
-    """
-    Sanitize text for Helvetica font.
-    Replaces any character outside latin-1 range with '?'
-    so fpdf2 never throws FPDFUnicodeEncodingException.
-    Call on every string before passing to pdf.cell() or multi_cell().
-    """
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
 class SpendWisePDF(FPDF):
-    """
-    Custom FPDF subclass.
-    Overrides header() and footer() so every page gets
-    SpendWise branding automatically — never called directly.
-    """
-
     def header(self):
         self.set_font("Helvetica", "B", 14)
         self.set_text_color(108, 99, 255)
@@ -68,7 +49,7 @@ class SpendWisePDF(FPDF):
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(150, 150, 150)
-        self.cell(0, 5, "Monthly Expense Report",
+        self.cell(0, 5, "Expense Report",
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.ln(3)
         self.set_draw_color(200, 200, 200)
@@ -86,36 +67,44 @@ class SpendWisePDF(FPDF):
         )
 
 
-def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
+def _write_month_page(pdf: SpendWisePDF, user_id: int,
+                      month: int, year: int,
+                      ai_summary: str = "") -> None:
     """
-    Generate a one-page monthly summary PDF.
-    Returns bytes for st.download_button.
+    Write one month's data onto the current PDF page.
+    Called once per month for All time, once total for single month.
     """
     today     = datetime.date.today()
-    from_date = today.replace(day=1)
+    from_date = datetime.date(year, month, 1)
 
-    df       = load_expenses(user_id, from_date=from_date, to_date=today)
-    budgets  = database.get_budgets(user_id, today.month, today.year)
-    user     = database.get_user_by_id(user_id)
+    # Last day of the month
+    if month == 12:
+        to_date = datetime.date(year + 1, 1, 1) - datetime.timedelta(days=1)
+    else:
+        to_date = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
+
+    # Don't show future dates
+    to_date = min(to_date, today)
+
+    df      = load_expenses(user_id, from_date=from_date, to_date=to_date)
+    budgets = database.get_budgets(user_id, month, year)
+    user    = database.get_user_by_id(user_id)
     username = user["username"] if user else "User"
 
-    pdf = SpendWisePDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
     # ── Month title ───────────────────────────────────────────────
+    month_name = datetime.date(year, month, 1).strftime("%B %Y")
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(26, 26, 46)
     pdf.cell(
         0, 10,
-        _safe(f"{today.strftime('%B %Y')} - Expense Report for {username}"),
+        _safe(f"{month_name} - Expense Report for {username}"),
         new_x=XPos.LMARGIN, new_y=YPos.NEXT
     )
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(150, 150, 150)
     pdf.cell(
         0, 5,
-        _safe(f"Period: {from_date.strftime('%d %b')} to {today.strftime('%d %b %Y')}"),
+        _safe(f"Period: {from_date.strftime('%d %b')} to {to_date.strftime('%d %b %Y')}"),
         new_x=XPos.LMARGIN, new_y=YPos.NEXT
     )
     pdf.ln(4)
@@ -125,14 +114,13 @@ def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
         pdf.set_text_color(26, 26, 46)
         pdf.cell(0, 10, "No expenses recorded this month.",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        return bytes(pdf.output())
+        return
 
     total_spent  = df["amount_inr"].sum()
-    total_budget = sum(budgets.values())
     num_expenses = len(df)
-    daily_avg    = total_spent / max(today.day, 1)
+    daily_avg    = total_spent / max(to_date.day, 1)
 
-    # ── Summary stats row ─────────────────────────────────────────
+    # ── Summary stats ─────────────────────────────────────────────
     pdf.set_fill_color(245, 245, 245)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(26, 26, 46)
@@ -147,9 +135,9 @@ def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
     pdf.cell(col_w, 10, f"Rs {total_spent:,.0f}", border=1, align="C")
     pdf.cell(col_w, 10, str(num_expenses),         border=1, align="C")
     pdf.cell(col_w, 10, f"Rs {daily_avg:,.0f}",   border=1, align="C")
-    pdf.ln(12)
+    pdf.ln(10)
 
-    # ── Category breakdown table ──────────────────────────────────
+    # ── Category breakdown ────────────────────────────────────────
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(26, 26, 46)
     pdf.cell(0, 8, "Category Breakdown",
@@ -176,10 +164,7 @@ def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
         pct    = f"{spent / budget * 100:.0f}%" if budget > 0 else "-"
 
         fill = i % 2 == 0
-        if fill:
-            pdf.set_fill_color(250, 250, 250)
-        else:
-            pdf.set_fill_color(255, 255, 255)
+        pdf.set_fill_color(250, 250, 250) if fill else pdf.set_fill_color(255, 255, 255)
 
         pdf.cell(55, 7, _safe(cat),                     border=1, fill=fill)
         pdf.cell(40, 7, f"{spent:,.0f}",                border=1, fill=fill, align="R")
@@ -213,10 +198,7 @@ def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
 
     for i, (_, row) in enumerate(top5.iterrows()):
         fill = i % 2 == 0
-        if fill:
-            pdf.set_fill_color(250, 250, 250)
-        else:
-            pdf.set_fill_color(255, 255, 255)
+        pdf.set_fill_color(250, 250, 250) if fill else pdf.set_fill_color(255, 255, 255)
 
         date_str = pd.to_datetime(row["date"]).strftime("%d %b")
         desc     = _safe(str(row["description"])[:35] or "(no desc)")
@@ -227,7 +209,7 @@ def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
         pdf.cell(30, 7, f"Rs {row['amount_inr']:,.0f}", border=1, fill=fill, align="R")
         pdf.ln()
 
-    # ── AI insight ────────────────────────────────────────────────
+    # ── AI insight (only on last page or single month) ────────────
     if ai_summary and ai_summary.strip():
         pdf.ln(6)
         pdf.set_font("Helvetica", "B", 11)
@@ -237,9 +219,91 @@ def get_pdf_bytes(user_id: int, ai_summary: str = "") -> bytes:
         pdf.ln(1)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(80, 80, 80)
-        # Sanitize AI output — LLM may return em dashes, smart quotes etc.
-        clean_summary = _safe(ai_summary)
-        pdf.multi_cell(0, 5, clean_summary)
+        pdf.multi_cell(0, 5, _safe(ai_summary))
+
+
+def get_pdf_bytes(user_id: int, ai_summary: str = "",
+                  scope: str = "This month",
+                  from_date: datetime.date = None,
+                  to_date: datetime.date = None) -> bytes:
+    """
+    Generate PDF report.
+    scope = "This month" | "Last month" | "All time" | "Custom"
+    All time = one page per month in chronological order.
+    """
+    today = datetime.date.today()
+    pdf   = SpendWisePDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    if scope == "All time":
+        # Find the earliest expense to know how far back to go
+        all_df = load_expenses(user_id)
+
+        if all_df.empty:
+            pdf.add_page()
+            pdf.set_font("Helvetica", "", 11)
+            pdf.cell(0, 10, "No expenses recorded.",
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            return bytes(pdf.output())
+
+        all_df["date"] = pd.to_datetime(all_df["date"])
+        earliest = all_df["date"].min().date()
+
+        # Build list of (month, year) from earliest to current in order
+        months = []
+        cur = datetime.date(earliest.year, earliest.month, 1)
+        end = datetime.date(today.year, today.month, 1)
+
+        while cur <= end:
+            months.append((cur.month, cur.year))
+            if cur.month == 12:
+                cur = datetime.date(cur.year + 1, 1, 1)
+            else:
+                cur = datetime.date(cur.year, cur.month + 1, 1)
+
+        # One page per month — AI summary only on last page
+        for i, (month, year) in enumerate(months):
+            pdf.add_page()
+            is_last = (i == len(months) - 1)
+            _write_month_page(
+                pdf, user_id, month, year,
+                ai_summary=ai_summary if is_last else ""
+            )
+
+    elif scope == "Last month":
+        first    = today.replace(day=1)
+        lm_to    = first - datetime.timedelta(days=1)
+        lm_from  = lm_to.replace(day=1)
+        pdf.add_page()
+        _write_month_page(pdf, user_id, lm_from.month, lm_from.year,
+                          ai_summary=ai_summary)
+
+    elif scope == "Custom" and from_date and to_date:
+        # For custom range — collect all months in range
+        months = []
+        cur = datetime.date(from_date.year, from_date.month, 1)
+        end = datetime.date(to_date.year, to_date.month, 1)
+
+        while cur <= end:
+            months.append((cur.month, cur.year))
+            if cur.month == 12:
+                cur = datetime.date(cur.year + 1, 1, 1)
+            else:
+                cur = datetime.date(cur.year, cur.month + 1, 1)
+
+        for i, (month, year) in enumerate(months):
+            pdf.add_page()
+            is_last = (i == len(months) - 1)
+            _write_month_page(
+                pdf, user_id, month, year,
+                ai_summary=ai_summary if is_last else ""
+            )
+
+    else:
+        # This month (default)
+        pdf.add_page()
+        _write_month_page(pdf, user_id, today.month, today.year,
+                          ai_summary=ai_summary)
 
     return bytes(pdf.output())
 
@@ -296,23 +360,77 @@ def show_export_page() -> None:
 
     # ── PDF ───────────────────────────────────────────────────────
     st.subheader("📄 Download PDF Report")
-    st.caption("One-page monthly summary with category breakdown and AI insight.")
+    st.caption("Monthly summary with category breakdown and AI insight.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        pdf_scope = st.selectbox(
+            "Date range",
+            ["This month", "Last month", "All time", "Custom"],
+            key="pdf_scope"
+        )
+
+    # Custom date pickers
+    pdf_from = None
+    pdf_to   = None
+    if pdf_scope == "Custom":
+        with col1:
+            pdf_from = st.date_input(
+                "From",
+                value=today.replace(day=1),
+                key="pdf_from"
+            )
+        with col2:
+            pdf_to = st.date_input(
+                "To",
+                value=today,
+                key="pdf_to"
+            )
+
+    # Info about multi-page
+    if pdf_scope == "All time":
+        st.info(
+            "All time report generates one page per month "
+            "in chronological order."
+        )
+    elif pdf_scope == "Custom" and pdf_from and pdf_to:
+        months_count = (
+            (pdf_to.year - pdf_from.year) * 12
+            + (pdf_to.month - pdf_from.month) + 1
+        )
+        if months_count > 1:
+            st.info(
+                f"Custom range covers {months_count} months — "
+                f"report will have {months_count} pages."
+            )
 
     ai_summary = st.session_state.get(f"ai_summary_{user_id}", "")
 
     if not ai_summary:
         st.caption(
-            "Visit the AI Insights page first to include "
-            "an AI summary in your PDF."
+            "Visit AI Insights first to include an AI summary in your PDF."
         )
 
     if st.button("Generate PDF", type="primary"):
         with st.spinner("Building your report..."):
-            pdf_bytes = get_pdf_bytes(user_id, ai_summary=ai_summary)
+            pdf_bytes = get_pdf_bytes(
+                user_id,
+                ai_summary=ai_summary,
+                scope=pdf_scope,
+                from_date=pdf_from,
+                to_date=pdf_to
+            )
+
+        filename = f"spendwise_report_{today.strftime('%Y_%m')}.pdf"
+        if pdf_scope == "All time":
+            filename = "spendwise_report_all_time.pdf"
+        elif pdf_scope == "Custom" and pdf_from and pdf_to:
+            filename = f"spendwise_{pdf_from.strftime('%Y%m')}_{pdf_to.strftime('%Y%m')}.pdf"
 
         st.download_button(
             label="⬇️ Download PDF",
             data=pdf_bytes,
-            file_name=f"spendwise_report_{today.strftime('%Y_%m')}.pdf",
+            file_name=filename,
             mime="application/pdf"
         )
