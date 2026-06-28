@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import joblib
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -12,8 +14,17 @@ import database
 from expenses import load_expenses
 from auth import CATEGORIES
 
-# Where model files are saved — one per user
 MODEL_DIR = os.path.dirname(__file__)
+
+COLOUR_MAP = {
+    "Food":          "#FF6B6B",
+    "Travel":        "#4ECDC4",
+    "Shopping":      "#45B7D1",
+    "Entertainment": "#96CEB4",
+    "Health":        "#FFEAA7",
+    "Utilities":     "#DDA0DD",
+    "Other":         "#B0B0B0",
+}
 
 
 def _model_path(user_id: int) -> str:
@@ -23,11 +34,6 @@ def _model_path(user_id: int) -> str:
 # ── Data guard ────────────────────────────────────────────────────────────────
 
 def has_enough_data(user_id: int, min_expenses: int = 10) -> bool:
-    """
-    ML features are meaningless on 2-3 rows of data.
-    This guard prevents the app from showing garbage predictions
-    to new users — a real-world ML engineering consideration.
-    """
     all_expenses = load_expenses(user_id)
     return len(all_expenses) >= min_expenses
 
@@ -35,70 +41,50 @@ def has_enough_data(user_id: int, min_expenses: int = 10) -> bool:
 # ── Feature engineering ───────────────────────────────────────────────────────
 
 def engineer_features(user_id: int, month: int, year: int) -> pd.DataFrame:
-    """
-    Convert raw expense rows into a feature matrix.
-    One row per category.
-
-    This is the most important function in the ML pipeline.
-    Raw data (individual transactions) is useless to a model.
-    Derived features (velocity, % used, days remaining) are meaningful.
-
-    Returns a DataFrame with columns:
-    category | spent | budget | pct_used | daily_velocity |
-    days_elapsed | days_remaining | projected_total
-    """
     today = datetime.date.today()
 
-    # Days in month
     if month == 12:
         days_in_month = 31
     else:
         last_day = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
         days_in_month = last_day.day
 
-    # Days elapsed so far (minimum 1 to avoid division by zero)
     if month == today.month and year == today.year:
         days_elapsed = max(today.day, 1)
     else:
-        days_elapsed = days_in_month  # completed month
+        days_elapsed = days_in_month
 
     days_remaining = max(days_in_month - days_elapsed, 0)
 
-    # Load expenses for this month
     from_date = datetime.date(year, month, 1)
     to_date   = (
         today if (month == today.month and year == today.year)
         else datetime.date(year, month, days_in_month)
     )
-    df = load_expenses(user_id, from_date=from_date, to_date=to_date)
-
-    # Load budgets for this month
+    df      = load_expenses(user_id, from_date=from_date, to_date=to_date)
     budgets = database.get_budgets(user_id, month, year)
 
     rows = []
     for category in CATEGORIES:
-        # Total spent in this category this month
         if df.empty:
             spent = 0.0
         else:
             cat_df = df[df["category"] == category]
             spent  = float(cat_df["amount_inr"].sum())
 
-        budget = float(budgets.get(category, 0.0))
-
-        # Avoid division by zero throughout
+        budget         = float(budgets.get(category, 0.0))
         pct_used       = (spent / budget * 100) if budget > 0 else 0.0
         daily_velocity = spent / days_elapsed
         projected      = daily_velocity * days_in_month
 
         rows.append({
-            "category":       category,
-            "spent":          spent,
-            "budget":         budget,
-            "pct_used":       pct_used,
-            "daily_velocity": daily_velocity,
-            "days_elapsed":   days_elapsed,
-            "days_remaining": days_remaining,
+            "category":        category,
+            "spent":           spent,
+            "budget":          budget,
+            "pct_used":        pct_used,
+            "daily_velocity":  daily_velocity,
+            "days_elapsed":    days_elapsed,
+            "days_remaining":  days_remaining,
             "projected_total": projected,
         })
 
@@ -106,42 +92,20 @@ def engineer_features(user_id: int, month: int, year: int) -> pd.DataFrame:
 
 
 def _make_label(pct_used: float) -> int:
-    """
-    Convert percentage used into a risk label.
-    0 = Safe, 1 = Warning, 2 = Danger
-
-    These thresholds become the ground truth that trains
-    the Logistic Regression model. The model then learns
-    to predict these labels from the other features,
-    allowing it to generalise beyond just % used.
-    """
     if pct_used >= 85:
-        return 2  # Danger
+        return 2
     elif pct_used >= 60:
-        return 1  # Warning
+        return 1
     else:
-        return 0  # Safe
+        return 0
 
 
 # ── Model training ────────────────────────────────────────────────────────────
 
-def train_risk_model(user_id: int) -> Pipeline | None:
-    """
-    Train a Logistic Regression risk classifier on the user's
-    historical data (all months except the current one).
-
-    Why Pipeline?
-    Pipeline chains StandardScaler + LogisticRegression into one object.
-    StandardScaler normalises features to the same scale — important
-    because pct_used (0-100) and daily_velocity (0-900) are on very
-    different scales. Without scaling, the model weights them incorrectly.
-
-    Returns the trained Pipeline, or None if not enough history.
-    """
-    today = datetime.date.today()
+def train_risk_model(user_id: int):
+    today    = datetime.date.today()
     all_rows = []
 
-    # Collect features from past months (up to 6 months back)
     for offset in range(1, 7):
         month = today.month - offset
         year  = today.year
@@ -161,7 +125,6 @@ def train_risk_model(user_id: int) -> Pipeline | None:
 
     combined = pd.concat(all_rows, ignore_index=True)
 
-    # Need at least 2 different labels to train a classifier
     if combined["label"].nunique() < 2:
         return None
 
@@ -175,18 +138,11 @@ def train_risk_model(user_id: int) -> Pipeline | None:
         ("clf",    LogisticRegression(max_iter=1000, random_state=42))
     ])
     model.fit(X, y)
-
-    # Save to disk so we don't retrain on every page load
     joblib.dump(model, _model_path(user_id))
     return model
 
 
-def _load_or_train(user_id: int) -> Pipeline | None:
-    """
-    Load saved model from disk if it exists, otherwise train a new one.
-    This means the model only retrains when explicitly called,
-    not on every Streamlit rerun.
-    """
+def _load_or_train(user_id: int):
     path = _model_path(user_id)
     if os.path.exists(path):
         return joblib.load(path)
@@ -196,13 +152,6 @@ def _load_or_train(user_id: int) -> Pipeline | None:
 # ── Risk classification ───────────────────────────────────────────────────────
 
 def predict_risk(user_id: int) -> pd.DataFrame:
-    """
-    Predict risk label for each category for the current month.
-
-    Returns a DataFrame with columns:
-    category | spent | budget | pct_used | projected_total |
-    risk_label | risk_score
-    """
     today    = datetime.date.today()
     features = engineer_features(user_id, today.month, today.year)
 
@@ -210,28 +159,24 @@ def predict_risk(user_id: int) -> pd.DataFrame:
                     "days_remaining", "projected_total"]
     X = features[feature_cols].values
 
-    model = _load_or_train(user_id)
-
+    model     = _load_or_train(user_id)
     label_map = {0: "Safe", 1: "Warning", 2: "Danger"}
 
     if model is not None:
         try:
-            predictions  = model.predict(X)
+            predictions   = model.predict(X)
             probabilities = model.predict_proba(X)
             features["risk_label"] = [label_map[p] for p in predictions]
-            # Confidence score for the predicted class
             features["risk_score"] = [
                 round(probabilities[i][predictions[i]] * 100, 1)
                 for i in range(len(predictions))
             ]
         except Exception:
-            # Fallback to rule-based if model fails for any reason
             features["risk_label"] = features["pct_used"].apply(
                 lambda x: label_map[_make_label(x)]
             )
             features["risk_score"] = 100.0
     else:
-        # No historical data — use rules directly
         features["risk_label"] = features["pct_used"].apply(
             lambda x: label_map[_make_label(x)]
         )
@@ -243,23 +188,10 @@ def predict_risk(user_id: int) -> pd.DataFrame:
 # ── Spend forecast ────────────────────────────────────────────────────────────
 
 def forecast_month_spend(user_id: int) -> dict:
-    """
-    Use Linear Regression to predict end-of-month total per category.
-
-    How it works:
-    X = day numbers (1, 2, 3 ... today)
-    y = cumulative spend up to that day
-
-    The model fits a line through these points and extends it to
-    day 30/31. The y value at day 30 is the forecast.
-
-    Returns dict: {category: predicted_total}
-    """
-    today = datetime.date.today()
+    today     = datetime.date.today()
     from_date = today.replace(day=1)
-    df = load_expenses(user_id, from_date=from_date, to_date=today)
+    df        = load_expenses(user_id, from_date=from_date, to_date=today)
 
-    # Days in this month
     if today.month == 12:
         days_in_month = 31
     else:
@@ -278,29 +210,21 @@ def forecast_month_spend(user_id: int) -> dict:
         cat_df = df[df["category"] == category].copy()
 
         if cat_df.empty or len(cat_df) < 2:
-            # Not enough data points for regression — use simple projection
             total_so_far = float(cat_df["amount_inr"].sum()) if not cat_df.empty else 0.0
             daily_avg    = total_so_far / max(today.day, 1)
             forecasts[category] = round(daily_avg * days_in_month, 2)
             continue
 
-        # Build daily cumulative spend
         cat_df["date"] = pd.to_datetime(cat_df["date"])
-        daily = (
-            cat_df.groupby(cat_df["date"].dt.day)["amount_inr"]
-            .sum()
-        )
-
-        # X = day number, y = cumulative sum up to that day
+        daily = cat_df.groupby(cat_df["date"].dt.day)["amount_inr"].sum()
         days   = np.array(daily.index).reshape(-1, 1)
         cumsum = np.cumsum(daily.values)
 
         model = LinearRegression()
         model.fit(days, cumsum)
 
-        # Predict at end of month
         predicted = model.predict([[days_in_month]])[0]
-        forecasts[category] = round(max(predicted, 0), 2)  # can't be negative
+        forecasts[category] = round(max(predicted, 0), 2)
 
     return forecasts
 
@@ -309,18 +233,9 @@ def forecast_month_spend(user_id: int) -> dict:
 
 def check_anomaly(user_id: int, amount: float,
                   category: str) -> tuple[bool, float]:
-    """
-    Check if a new expense amount is unusually high for this category.
-    Uses z-score: how many standard deviations from the mean is this?
-
-    z > 2.0 means the value is in the top ~2.3% — flagged as unusual.
-
-    Returns (is_anomaly: bool, z_score: float)
-    """
     all_expenses = load_expenses(user_id, categories=[category])
 
     if len(all_expenses) < 5:
-        # Not enough history to judge — don't flag anything
         return False, 0.0
 
     amounts = all_expenses["amount_inr"].values
@@ -328,28 +243,27 @@ def check_anomaly(user_id: int, amount: float,
     if amounts.std() == 0:
         return False, 0.0
 
-    z = float(stats.zscore(np.append(amounts, amount))[-1])
+    z          = float(stats.zscore(np.append(amounts, amount))[-1])
     is_anomaly = abs(z) > 2.0
-
     return is_anomaly, round(z, 2)
 
 
-# ── Blind spot detection ──────────────────────────────────────────────────────
+# ── Blind spot detection — fixed ──────────────────────────────────────────────
 
-def find_blind_spot(user_id: int) -> str | None:
+def find_blind_spot(user_id: int) -> dict:
     """
-    Find the category that has exceeded its budget most often
-    across all historical months.
-
-    Pure pandas — no ML needed here.
-    Just counts how many months each category went over budget.
-
-    Returns the worst category name, or None if not enough data.
+    Returns a dict with:
+    - worst_category: category name or None
+    - overspend_counts: {category: months_over_budget}
+    - monthly_summary: list of {month_label, category, spent, budget, over}
+    Looks at past 6 months INCLUDING current month.
     """
-    today       = datetime.date.today()
+    today           = datetime.date.today()
     overspend_count = {cat: 0 for cat in CATEGORIES}
+    monthly_summary = []
 
-    for offset in range(1, 7):
+    # Include current month (offset 0) and past 5 (offsets 1-5)
+    for offset in range(0, 6):
         month = today.month - offset
         year  = today.year
         if month <= 0:
@@ -362,32 +276,245 @@ def find_blind_spot(user_id: int) -> str | None:
         if features.empty or not budgets:
             continue
 
+        month_label = datetime.date(year, month, 1).strftime("%b %Y")
+
         for _, row in features.iterrows():
-            cat    = row["category"]
-            limit  = budgets.get(cat, 0)
+            cat   = row["category"]
+            limit = budgets.get(cat, 0)
             if limit > 0 and row["spent"] > limit:
                 overspend_count[cat] += 1
+                monthly_summary.append({
+                    "month":    month_label,
+                    "category": cat,
+                    "spent":    row["spent"],
+                    "budget":   limit,
+                    "over_by":  row["spent"] - limit
+                })
 
-    # Return category with most overspends, if any happened
     max_count = max(overspend_count.values())
-    if max_count == 0:
-        return None
+    worst     = (
+        max(overspend_count, key=lambda c: overspend_count[c])
+        if max_count > 0 else None
+    )
 
-    return max(overspend_count, key=lambda c: overspend_count[c])
+    return {
+        "worst_category":  worst,
+        "overspend_counts": overspend_count,
+        "monthly_summary": monthly_summary,
+        "max_count":       max_count
+    }
 
 
-# ── Streamlit UI ──────────────────────────────────────────────────────────────
+# ── Spending trend charts ─────────────────────────────────────────────────────
+
+def _show_spending_trends(user_id: int) -> None:
+    """
+    Interactive spending trend charts.
+    User can toggle: Weekly / Monthly view
+    User can select which categories to show
+    Budget line shown on chart
+    """
+    st.subheader("📈 Spending trends")
+
+    # ── Controls row ──────────────────────────────────────────────
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col1:
+        view_mode = st.radio(
+            "View by",
+            ["Weekly", "Monthly"],
+            horizontal=True
+        )
+
+    with col2:
+        selected_cats = st.multiselect(
+            "Categories",
+            CATEGORIES,
+            default=["Food", "Travel", "Utilities"],
+            help="Select one or more categories to compare"
+        )
+
+    with col3:
+        show_budget = st.checkbox("Show budget line", value=True)
+
+    if not selected_cats:
+        st.info("Select at least one category to view trends.")
+        return
+
+    # ── Load all data ─────────────────────────────────────────────
+    today     = datetime.date.today()
+    # Load 3 months of data
+    from_date = datetime.date(today.year, today.month - 2 if today.month > 2
+                              else today.month + 10, 1)
+    if today.month <= 2:
+        from_date = datetime.date(today.year - 1, from_date.month, 1)
+
+    df = load_expenses(user_id, from_date=from_date, to_date=today)
+
+    if df.empty:
+        st.info("No data available for the selected period.")
+        return
+
+    df["date"] = pd.to_datetime(df["date"])
+    df = df[df["category"].isin(selected_cats)]
+
+    if df.empty:
+        st.info("No data for selected categories.")
+        return
+
+    # ── Build chart data ──────────────────────────────────────────
+    if view_mode == "Weekly":
+        # Group by ISO week + category
+        df["week"] = df["date"].dt.to_period("W").apply(
+            lambda r: r.start_time.strftime("%d %b")
+        )
+        grouped = (
+            df.groupby(["week", "category"])["amount_inr"]
+            .sum()
+            .reset_index()
+        )
+        grouped.columns = ["Period", "Category", "Amount"]
+        x_label = "Week starting"
+
+    else:
+        # Group by month + category
+        df["month"] = df["date"].dt.to_period("M").apply(
+            lambda r: r.start_time.strftime("%b %Y")
+        )
+        grouped = (
+            df.groupby(["month", "category"])["amount_inr"]
+            .sum()
+            .reset_index()
+        )
+        grouped.columns = ["Period", "Category", "Amount"]
+        x_label = "Month"
+
+    # ── Main bar chart ────────────────────────────────────────────
+    fig = px.bar(
+        grouped,
+        x="Period",
+        y="Amount",
+        color="Category",
+        barmode="group",
+        color_discrete_map=COLOUR_MAP,
+        labels={"Amount": "Amount (Rs)", "Period": x_label},
+        height=420,
+    )
+
+    # ── Budget lines ──────────────────────────────────────────────
+    if show_budget:
+        budgets = database.get_budgets(user_id, today.month, today.year)
+
+        # For monthly view — draw a horizontal budget line per category
+        if view_mode == "Monthly" and budgets:
+            periods = grouped["Period"].unique().tolist()
+
+            for cat in selected_cats:
+                limit = budgets.get(cat, 0)
+                if limit <= 0:
+                    continue
+
+                colour = COLOUR_MAP.get(cat, "#888888")
+
+                fig.add_trace(go.Scatter(
+                    x=periods,
+                    y=[limit] * len(periods),
+                    mode="lines",
+                    name=f"{cat} budget",
+                    line=dict(
+                        color=colour,
+                        width=1.5,
+                        dash="dash"
+                    ),
+                    opacity=0.7,
+                    hovertemplate=f"{cat} budget: Rs{limit:,.0f}<extra></extra>"
+                ))
+
+        # For weekly view — show monthly budget divided by ~4.3 as weekly target
+        elif view_mode == "Weekly" and budgets:
+            periods = grouped["Period"].unique().tolist()
+
+            for cat in selected_cats:
+                limit = budgets.get(cat, 0)
+                if limit <= 0:
+                    continue
+
+                weekly_target = round(limit / 4.3, 0)
+                colour        = COLOUR_MAP.get(cat, "#888888")
+
+                fig.add_trace(go.Scatter(
+                    x=periods,
+                    y=[weekly_target] * len(periods),
+                    mode="lines",
+                    name=f"{cat} weekly target",
+                    line=dict(
+                        color=colour,
+                        width=1.5,
+                        dash="dot"
+                    ),
+                    opacity=0.7,
+                    hovertemplate=(
+                        f"{cat} weekly target: Rs{weekly_target:,.0f}<extra></extra>"
+                    )
+                ))
+
+    fig.update_layout(
+        margin=dict(t=30, b=20, l=0, r=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False),
+        yaxis=dict(gridcolor="rgba(200,200,200,0.1)"),
+    )
+    fig.update_traces(
+        selector=dict(type="bar"),
+        hovertemplate="<b>%{x}</b><br>Rs%{y:,.0f}"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Line chart for trend over time ────────────────────────────
+    st.caption("Spending trend over time per category")
+
+    if view_mode == "Weekly":
+        trend_df = grouped.copy()
+    else:
+        trend_df = grouped.copy()
+
+    fig2 = px.line(
+        trend_df,
+        x="Period",
+        y="Amount",
+        color="Category",
+        markers=True,
+        color_discrete_map=COLOUR_MAP,
+        labels={"Amount": "Amount (Rs)", "Period": x_label},
+        height=300,
+    )
+    fig2.update_layout(
+        margin=dict(t=10, b=20, l=0, r=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        hovermode="x unified",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False),
+        yaxis=dict(gridcolor="rgba(200,200,200,0.1)"),
+    )
+    fig2.update_traces(
+        hovertemplate="<b>%{fullData.name}</b>: Rs%{y:,.0f}"
+    )
+
+    st.plotly_chart(fig2, use_container_width=True)
+
+
+# ── Main UI ───────────────────────────────────────────────────────────────────
 
 def show_ml_insights_page() -> None:
-    """
-    Render the ML Insights page.
-    Shows risk labels, forecasts, and blind spot — all in one place.
-    """
     st.header("🤖 ML Insights")
 
     user_id = st.session_state["user_id"]
 
-    # ── Data guard ────────────────────────────────────────────────
     if not has_enough_data(user_id):
         all_exp = load_expenses(user_id)
         count   = len(all_exp)
@@ -407,19 +534,23 @@ def show_ml_insights_page() -> None:
             st.success("Model retrained!")
             st.rerun()
 
+    # ── Spending trends (new) ─────────────────────────────────────
+    _show_spending_trends(user_id)
+
+    st.divider()
+
     # ── Risk labels ───────────────────────────────────────────────
-    st.subheader("Spending risk by category")
+    st.subheader("🚦 Spending risk by category")
     st.caption(
-        "Predicted by a Logistic Regression model trained on your "
-        "historical spending patterns."
+        "Logistic Regression trained on your historical spending — "
+        "Safe / Warning / Danger based on pace vs budget."
     )
 
     risk_df = predict_risk(user_id)
 
-    RISK_ICONS = {"Safe": "🟢", "Warning": "🟠", "Danger": "🔴"}
+    RISK_ICONS   = {"Safe": "🟢", "Warning": "🟠", "Danger": "🔴"}
     RISK_COLOURS = {"Safe": "normal", "Warning": "inverse", "Danger": "off"}
 
-    # Display in a 3-column grid
     cols = st.columns(3)
     for i, (_, row) in enumerate(risk_df.iterrows()):
         with cols[i % 3]:
@@ -428,23 +559,72 @@ def show_ml_insights_page() -> None:
             st.metric(
                 label=f"{icon} {row['category']}",
                 value=label,
-                delta=f"₹{row['spent']:,.0f} spent · {row['pct_used']:.0f}% of budget",
+                delta=f"Rs{row['spent']:,.0f} · {row['pct_used']:.0f}% of budget",
                 delta_color=RISK_COLOURS.get(label, "off")
             )
 
     st.divider()
 
     # ── Spend forecast ────────────────────────────────────────────
-    st.subheader("Month-end forecast")
+    st.subheader("🔮 Month-end forecast")
     st.caption(
-        "Linear Regression on your daily spend trend "
-        "this month — predicts where each category will land."
+        "Linear Regression on your daily spend trend — "
+        "predicts where each category will land by end of month."
     )
 
     forecasts = forecast_month_spend(user_id)
     today     = datetime.date.today()
     budgets   = database.get_budgets(user_id, today.month, today.year)
 
+    # Forecast bar chart — predicted vs budget
+    forecast_rows = []
+    for cat in CATEGORIES:
+        predicted = forecasts.get(cat, 0.0)
+        limit     = budgets.get(cat, 0.0)
+        if predicted == 0 and limit == 0:
+            continue
+        forecast_rows.append({
+            "Category":  cat,
+            "Predicted": predicted,
+            "Budget":    limit
+        })
+
+    if forecast_rows:
+        fdf = pd.DataFrame(forecast_rows)
+        fdf_melted = fdf.melt(
+            id_vars="Category",
+            value_vars=["Predicted", "Budget"],
+            var_name="Type",
+            value_name="Amount"
+        )
+
+        fig3 = px.bar(
+            fdf_melted,
+            x="Category",
+            y="Amount",
+            color="Type",
+            barmode="group",
+            color_discrete_map={
+                "Predicted": "#6C63FF",
+                "Budget":    "#444444"
+            },
+            labels={"Amount": "Amount (Rs)"},
+            height=320
+        )
+        fig3.update_layout(
+            margin=dict(t=10, b=20, l=0, r=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(showgrid=False),
+            yaxis=dict(gridcolor="rgba(200,200,200,0.1)"),
+        )
+        fig3.update_traces(
+            hovertemplate="<b>%{x}</b><br>Rs%{y:,.0f}"
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+
+    # Metric cards below chart
     cols = st.columns(3)
     for i, category in enumerate(CATEGORIES):
         predicted = forecasts.get(category, 0.0)
@@ -454,9 +634,9 @@ def show_ml_insights_page() -> None:
             if limit > 0:
                 overshoot = predicted - limit
                 delta_str = (
-                    f"+₹{overshoot:,.0f} over budget"
+                    f"+Rs{overshoot:,.0f} over budget"
                     if overshoot > 0
-                    else f"₹{abs(overshoot):,.0f} under budget"
+                    else f"Rs{abs(overshoot):,.0f} under budget"
                 )
                 delta_col = "inverse" if overshoot > 0 else "normal"
             else:
@@ -465,42 +645,96 @@ def show_ml_insights_page() -> None:
 
             st.metric(
                 label=category,
-                value=f"₹{predicted:,.0f}",
+                value=f"Rs{predicted:,.0f}",
                 delta=delta_str,
                 delta_color=delta_col
             )
 
     st.divider()
 
-   # ── Blind spot ────────────────────────────────────────────────
-    st.subheader("Your spending blind spot")
+    # ── Blind spot — fixed ────────────────────────────────────────
+    st.subheader("📍 Your spending blind spot")
 
-    blind_spot = find_blind_spot(user_id)
+    result      = find_blind_spot(user_id)
+    worst       = result["worst_category"]
+    counts      = result["overspend_counts"]
+    summary     = result["monthly_summary"]
+    max_count   = result["max_count"]
 
-    # Also check current month overbudget categories
-    today    = datetime.date.today()
-    budgets  = database.get_budgets(user_id, today.month, today.year)
-    risk_df  = predict_risk(user_id)
-
-    current_overbudget = risk_df[
-        (risk_df["risk_label"] == "Danger") & (risk_df["budget"] > 0)
+    risk_df_now = predict_risk(user_id)
+    current_overbudget = risk_df_now[
+        (risk_df_now["risk_label"] == "Danger") &
+        (risk_df_now["budget"] > 0)
     ]["category"].tolist()
 
-    if blind_spot:
+    if worst and max_count >= 1:
         st.error(
-            f"📍 **{blind_spot}** is your recurring blind spot — "
-            f"you've exceeded this budget more consistently than any "
-            f"other category over the past 6 months."
+            f"📍 **{worst}** is your recurring blind spot — "
+            f"you've exceeded this budget in "
+            f"**{counts[worst]} month{'s' if counts[worst] > 1 else ''}** "
+            f"out of the last 6."
         )
+
+        # Show overspend history as a small bar chart
+        if summary:
+            sdf = pd.DataFrame(summary)
+            sdf_worst = sdf[sdf["category"] == worst]
+
+            if not sdf_worst.empty:
+                fig4 = px.bar(
+                    sdf_worst,
+                    x="month",
+                    y="over_by",
+                    color_discrete_sequence=["#FF6B6B"],
+                    labels={"over_by": "Over budget by (Rs)", "month": "Month"},
+                    title=f"{worst} — monthly overspend history",
+                    height=250
+                )
+                fig4.update_layout(
+                    margin=dict(t=40, b=20, l=0, r=0),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    showlegend=False
+                )
+                fig4.update_traces(
+                    hovertemplate="<b>%{x}</b><br>Over by Rs%{y:,.0f}"
+                )
+                st.plotly_chart(fig4, use_container_width=True)
+
+        # Overspend counts for all categories
+        count_df = pd.DataFrame([
+            {"Category": cat, "Months over budget": cnt}
+            for cat, cnt in counts.items()
+            if cnt > 0
+        ]).sort_values("Months over budget", ascending=False)
+
+        if not count_df.empty:
+            st.caption("All categories — months exceeded budget")
+            fig5 = px.bar(
+                count_df,
+                x="Category",
+                y="Months over budget",
+                color="Category",
+                color_discrete_map=COLOUR_MAP,
+                height=220
+            )
+            fig5.update_layout(
+                margin=dict(t=10, b=20, l=0, r=0),
+                showlegend=False,
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig5, use_container_width=True)
+
     elif current_overbudget:
         cats = ", ".join(f"**{c}**" for c in current_overbudget)
         st.warning(
-            f"⚠️ No recurring pattern yet (not enough history), but "
+            f"No recurring pattern detected across past months yet, but "
             f"{cats} {'is' if len(current_overbudget) == 1 else 'are'} "
-            f"already over budget this month — worth watching."
+            f"over budget this month — worth watching."
         )
     else:
         st.success(
-            "No recurring blind spots detected and you're within "
-            "budget across all categories this month. Great work!"
+            "No recurring blind spots and you're within budget "
+            "across all categories. Great work!"
         )
