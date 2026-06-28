@@ -1,35 +1,32 @@
 import bcrypt
 import streamlit as st
+import plotly.express as px
+import pandas as pd
+import datetime
 import database
 
-# These are your fixed app categories — used throughout the entire app
 CATEGORIES = ["Food", "Travel", "Shopping", "Entertainment", "Health", "Utilities", "Other"]
+
+COLOUR_MAP = {
+    "Food":          "#FF6B6B",
+    "Travel":        "#4ECDC4",
+    "Shopping":      "#45B7D1",
+    "Entertainment": "#96CEB4",
+    "Health":        "#FFEAA7",
+    "Utilities":     "#DDA0DD",
+    "Other":         "#B0B0B0",
+}
 
 
 # ── Password utilities ────────────────────────────────────────────────────────
 
 def hash_password(plain_password: str) -> str:
-    """
-    Hash a plain-text password using bcrypt.
-
-    bcrypt automatically generates a random salt and embeds it in the hash.
-    This means even if two users have the same password, their hashes differ.
-
-    Returns a string (decoded from bytes) safe to store in SQLite.
-    """
-    password_bytes = plain_password.encode("utf-8")   # bcrypt needs bytes, not str
+    password_bytes = plain_password.encode("utf-8")
     hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
-    return hashed.decode("utf-8")                      # store as string in DB
+    return hashed.decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Check if a plain-text password matches a stored bcrypt hash.
-
-    bcrypt.checkpw extracts the salt from the stored hash, re-hashes the
-    plain password with that same salt, and compares. You never decrypt —
-    bcrypt is one-way.
-    """
     return bcrypt.checkpw(
         plain_password.encode("utf-8"),
         hashed_password.encode("utf-8")
@@ -39,17 +36,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 # ── Session utilities ─────────────────────────────────────────────────────────
 
 def init_session():
-    """
-    Set up default session_state keys if they don't exist yet.
-    Call this at the very top of app.py on every rerun.
-
-    Think of this as declaring your global variables safely.
-    """
     defaults = {
         "logged_in": False,
-        "user_id": None,
-        "username": None,
-        "email": None,
+        "user_id":   None,
+        "username":  None,
+        "email":     None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -57,10 +48,6 @@ def init_session():
 
 
 def login_user(user_row) -> None:
-    """
-    Store user info in session_state after successful login.
-    user_row is a sqlite3.Row object from database.get_user_by_email().
-    """
     st.session_state["logged_in"] = True
     st.session_state["user_id"]   = user_row["id"]
     st.session_state["username"]  = user_row["username"]
@@ -68,10 +55,6 @@ def login_user(user_row) -> None:
 
 
 def logout_user() -> None:
-    """
-    Clear all session_state keys and force a rerun.
-    This takes the user back to the login page immediately.
-    """
     for key in ["logged_in", "user_id", "username", "email"]:
         st.session_state[key] = None
     st.session_state["logged_in"] = False
@@ -79,18 +62,12 @@ def logout_user() -> None:
 
 
 def is_logged_in() -> bool:
-    """Convenience check used in app.py to decide which page to show."""
     return st.session_state.get("logged_in", False)
 
 
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def show_register_form() -> None:
-    """
-    Render the registration form and handle submission.
-    Uses st.form so the whole form submits at once — no partial reruns
-    while the user is still typing.
-    """
     st.title("Create your SpendWise account")
 
     with st.form("register_form"):
@@ -102,25 +79,20 @@ def show_register_form() -> None:
         submit   = st.form_submit_button("Register")
 
     if submit:
-        # ── Validation ───────────────────────────────────────────
         if not username or not email or not password:
             st.error("All fields are required.")
             return
-
         if len(password) < 8:
             st.error("Password must be at least 8 characters.")
             return
-
         if password != confirm:
             st.error("Passwords do not match.")
             return
-
         if "@" not in email or "." not in email:
             st.error("Please enter a valid email address.")
             return
 
-        # ── Create user ──────────────────────────────────────────
-        hashed = hash_password(password)
+        hashed  = hash_password(password)
         success = database.create_user(username, email, hashed)
 
         if success:
@@ -132,11 +104,6 @@ def show_register_form() -> None:
 # ── Login ─────────────────────────────────────────────────────────────────────
 
 def show_login_form() -> None:
-    """
-    Render the login form and handle submission.
-    On success, calls login_user() to populate session_state,
-    then st.rerun() to immediately show the dashboard.
-    """
     st.title("Welcome back to SpendWise 👋")
 
     with st.form("login_form"):
@@ -152,7 +119,6 @@ def show_login_form() -> None:
         user = database.get_user_by_email(email)
 
         if user is None:
-            # Don't say "email not found" — that leaks info about who's registered
             st.error("Invalid email or password.")
             return
 
@@ -160,44 +126,212 @@ def show_login_form() -> None:
             st.error("Invalid email or password.")
             return
 
-        # Credentials are valid — load into session
         login_user(user)
-        st.rerun()   # triggers a full rerun — app.py now sees logged_in=True
+        st.rerun()
 
 
 # ── Settings page ─────────────────────────────────────────────────────────────
 
 def show_settings_page() -> None:
-    """
-    Let the user set monthly budget limits per category.
-    Reads existing budgets from DB and pre-fills the inputs.
-    """
-    import datetime
-
     st.header("⚙️ Settings")
-    st.subheader("Monthly budgets")
-    st.caption("Set how much you want to spend per category this month.")
 
     user_id = st.session_state["user_id"]
-    now     = datetime.datetime.now()
+    today   = datetime.datetime.now()
 
-    # Load whatever budgets already exist for this month
-    existing = database.get_budgets(user_id, now.month, now.year)
+    # ── Month scope selector ──────────────────────────────────────
+    st.subheader("Budget scope")
+    st.caption(
+        "Choose whether to update budgets for this month only, "
+        "or apply the same limits to all months going forward."
+    )
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        scope = st.radio(
+            "Apply budget to",
+            ["This month only", "All months (past + future)"],
+            help=(
+                "This month only — updates just the current month's budget. "
+                "All months — sets the same budget across every month in your history "
+                "and going forward."
+            )
+        )
+
+    # ── Load existing budgets ─────────────────────────────────────
+    existing = database.get_budgets(user_id, today.month, today.year)
+
+    # ── Budget pie chart ──────────────────────────────────────────
+    st.subheader("Current budget allocation")
+
+    budget_values = {
+        cat: existing.get(cat, 0.0) for cat in CATEGORIES
+    }
+    total_budget = sum(budget_values.values())
+
+    if total_budget > 0:
+        pie_df = pd.DataFrame([
+            {"Category": cat, "Budget": val}
+            for cat, val in budget_values.items()
+            if val > 0
+        ])
+
+        col_chart, col_summary = st.columns([1.2, 1])
+
+        with col_chart:
+            fig = px.pie(
+                pie_df,
+                values="Budget",
+                names="Category",
+                hole=0.4,
+                color="Category",
+                color_discrete_map=COLOUR_MAP,
+            )
+            fig.update_traces(
+                textposition="inside",
+                textinfo="percent+label",
+                hovertemplate="<b>%{label}</b><br>Rs%{value:,.0f}<br>%{percent}"
+            )
+            fig.update_layout(
+                showlegend=False,
+                margin=dict(t=10, b=10, l=0, r=0),
+                height=280,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col_summary:
+            st.markdown("**Budget breakdown**")
+            for cat in CATEGORIES:
+                val = budget_values.get(cat, 0.0)
+                if val > 0:
+                    pct = val / total_budget * 100
+                    colour = COLOUR_MAP.get(cat, "#888")
+                    st.markdown(
+                        f"<div style='display:flex; justify-content:space-between; "
+                        f"padding: 4px 0; border-bottom: 1px solid #2D2D3F;'>"
+                        f"<span style='color:{colour}; font-weight:500;'>{cat}</span>"
+                        f"<span>Rs{val:,.0f} &nbsp;<span style='color:#888;'>"
+                        f"({pct:.0f}%)</span></span></div>",
+                        unsafe_allow_html=True
+                    )
+            st.markdown(
+                f"<div style='padding: 8px 0; font-weight:600;'>"
+                f"Total &nbsp; Rs{total_budget:,.0f}</div>",
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("No budgets set yet — enter your limits below to see the allocation chart.")
+
+    st.divider()
+
+    # ── Budget input form ─────────────────────────────────────────
+    st.subheader("Set monthly budgets")
+    st.caption(
+        f"Currently editing: **{today.strftime('%B %Y')}**"
+        if scope == "This month only"
+        else "Setting budgets for **all months**"
+    )
 
     with st.form("budget_form"):
         budgets = {}
-        for category in CATEGORIES:
+
+        # Two columns for the inputs
+        col1, col2 = st.columns(2)
+        for i, category in enumerate(CATEGORIES):
             current_limit = existing.get(category, 0.0)
-            budgets[category] = st.number_input(
-                f"{category} (₹)",
-                min_value=0.0,
-                value=float(current_limit),
-                step=100.0,
-                key=f"budget_{category}"
-            )
-        save = st.form_submit_button("Save budgets")
+            with col1 if i % 2 == 0 else col2:
+                budgets[category] = st.number_input(
+                    f"{category} (Rs)",
+                    min_value=0.0,
+                    value=float(current_limit),
+                    step=100.0,
+                    key=f"budget_{category}"
+                )
+
+        save = st.form_submit_button("💾 Save budgets", use_container_width=True,
+                                     type="primary")
 
     if save:
-        for category, limit in budgets.items():
-            database.set_budget(user_id, category, limit, now.month, now.year)
-        st.success("Budgets saved successfully!")
+        if scope == "This month only":
+            # Save only for current month
+            for category, limit in budgets.items():
+                database.set_budget(
+                    user_id, category, limit,
+                    today.month, today.year
+                )
+            st.success(
+                f"Budgets saved for {today.strftime('%B %Y')} only."
+            )
+
+        else:
+            # Apply to all months that exist in the database
+            # plus the next 12 months going forward
+            months_to_update = set()
+
+            # Past months — find all months with existing expense data
+            from expenses import load_expenses
+            all_df = load_expenses(user_id)
+
+            if not all_df.empty:
+                import pandas as pd_inner
+                all_df["date"] = pd_inner.to_datetime(all_df["date"])
+                for _, row in all_df.iterrows():
+                    months_to_update.add(
+                        (row["date"].month, row["date"].year)
+                    )
+
+            # Current month
+            months_to_update.add((today.month, today.year))
+
+            # Next 12 months
+            for offset in range(1, 13):
+                m = today.month + offset
+                y = today.year
+                if m > 12:
+                    m -= 12
+                    y += 1
+                months_to_update.add((m, y))
+
+            for month, year in months_to_update:
+                for category, limit in budgets.items():
+                    database.set_budget(user_id, category, limit, month, year)
+
+            st.success(
+                f"Budgets applied across {len(months_to_update)} months "
+                f"(all history + next 12 months)."
+            )
+
+        # Rerun so pie chart updates immediately
+        st.rerun()
+
+    # ── Change password ───────────────────────────────────────────
+    st.divider()
+    st.subheader("Change password")
+
+    with st.form("password_form"):
+        current_pw  = st.text_input("Current password", type="password")
+        new_pw      = st.text_input("New password", type="password",
+                                    help="Minimum 8 characters")
+        confirm_pw  = st.text_input("Confirm new password", type="password")
+        change_btn  = st.form_submit_button("Update password")
+
+    if change_btn:
+        if not current_pw or not new_pw or not confirm_pw:
+            st.error("All fields are required.")
+        elif len(new_pw) < 8:
+            st.error("New password must be at least 8 characters.")
+        elif new_pw != confirm_pw:
+            st.error("New passwords do not match.")
+        else:
+            user = database.get_user_by_id(user_id)
+            if not verify_password(current_pw, user["password"]):
+                st.error("Current password is incorrect.")
+            else:
+                new_hash = hash_password(new_pw)
+                conn = database.get_connection()
+                conn.execute(
+                    "UPDATE users SET password = ? WHERE id = ?",
+                    (new_hash, user_id)
+                )
+                conn.commit()
+                conn.close()
+                st.success("Password updated successfully.")
