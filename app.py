@@ -7,12 +7,23 @@ import ml_insights
 import ai_insights        # ← add
 import export             # ← add
 
+
+
+from styles.global_css import inject_global_css
+from styles.components import (
+    page_banner, section_header, glass_card,
+    risk_badge, stat_card, tip_card,
+    ai_commentary, category_pill, empty_state
+)
+
 st.set_page_config(
     page_title="SpendWise",
     page_icon="💸",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+inject_global_css()   # ← one call, styles entire app
 
 database.init_db()
 auth.init_session()
