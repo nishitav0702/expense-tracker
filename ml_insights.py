@@ -327,12 +327,28 @@ def _show_spending_trends(user_id: int) -> None:
         st.info("Select at least one category to view trends.")
         return
 
-    today     = datetime.date.today()
-    from_date = datetime.date(
-        today.year if today.month > 2 else today.year - 1,
-        today.month - 2 if today.month > 2 else today.month + 10,
-        1
+    # ── Month range slider ────────────────────────────────────────
+    months_back = st.slider(
+        "Months to show",
+        min_value=1,
+        max_value=12,
+        value=3,
+        step=1,
+        help="Drag to show more or fewer months of history"
     )
+
+    # ── Correctly compute from_date ───────────────────────────────
+    today = datetime.date.today()
+
+    # Go back exactly months_back months from current month
+    back_month = today.month - months_back
+    back_year  = today.year
+
+    while back_month <= 0:
+        back_month += 12
+        back_year  -= 1
+
+    from_date = datetime.date(back_year, back_month, 1)
 
     df = load_expenses(user_id, from_date=from_date, to_date=today)
 
@@ -347,7 +363,7 @@ def _show_spending_trends(user_id: int) -> None:
         st.info("No data for selected categories.")
         return
 
-    # ── Build chart data — sorted chronologically ─────────────────
+    # ── Build chart data sorted chronologically ───────────────────
     if view_mode == "Weekly":
         df["week_period"] = df["date"].dt.to_period("W")
         df["week_label"]  = df["date"].dt.to_period("W").apply(
@@ -378,6 +394,9 @@ def _show_spending_trends(user_id: int) -> None:
         grouped.columns = ["Period", "Category", "Amount"]
         x_label = "Month"
 
+    # Preserve sorted order for Plotly
+    period_order = grouped["Period"].unique().tolist()
+
     # ── Grouped bar chart ─────────────────────────────────────────
     fig = px.bar(
         grouped,
@@ -388,12 +407,12 @@ def _show_spending_trends(user_id: int) -> None:
         color_discrete_map=COLOUR_MAP,
         labels={"Amount": "Amount (Rs)", "Period": x_label},
         height=420,
+        category_orders={"Period": period_order}
     )
 
     # ── Budget lines ──────────────────────────────────────────────
     if show_budget:
         budgets = database.get_budgets(user_id, today.month, today.year)
-        periods = grouped["Period"].unique().tolist()
 
         if view_mode == "Monthly" and budgets:
             for cat in selected_cats:
@@ -401,8 +420,8 @@ def _show_spending_trends(user_id: int) -> None:
                 if limit <= 0:
                     continue
                 fig.add_trace(go.Scatter(
-                    x=periods,
-                    y=[limit] * len(periods),
+                    x=period_order,
+                    y=[limit] * len(period_order),
                     mode="lines",
                     name=f"{cat} budget",
                     line=dict(
@@ -421,8 +440,8 @@ def _show_spending_trends(user_id: int) -> None:
                     continue
                 weekly_target = round(limit / 4.3, 0)
                 fig.add_trace(go.Scatter(
-                    x=periods,
-                    y=[weekly_target] * len(periods),
+                    x=period_order,
+                    y=[weekly_target] * len(period_order),
                     mode="lines",
                     name=f"{cat} weekly target",
                     line=dict(
@@ -465,6 +484,7 @@ def _show_spending_trends(user_id: int) -> None:
         color_discrete_map=COLOUR_MAP,
         labels={"Amount": "Amount (Rs)", "Period": x_label},
         height=300,
+        category_orders={"Period": period_order}
     )
     fig2.update_layout(
         margin=dict(t=10, b=20, l=0, r=0),
@@ -472,18 +492,13 @@ def _show_spending_trends(user_id: int) -> None:
         hovermode="x unified",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(
-            showgrid=False,
-            categoryorder="array",
-            categoryarray=grouped["Period"].unique().tolist()
-        ),
+        xaxis=dict(showgrid=False),
         yaxis=dict(gridcolor="rgba(200,200,200,0.1)"),
     )
     fig2.update_traces(
         hovertemplate="<b>%{fullData.name}</b>: Rs%{y:,.0f}"
     )
     st.plotly_chart(fig2, use_container_width=True)
-
 
 # ── Main UI ───────────────────────────────────────────────────────────────────
 
