@@ -16,6 +16,15 @@ CATEGORY_COLOURS = {
     "Other":         "#B0B0B0",
 }
 
+def get_all_categories(user_id: int) -> list[str]:
+    """
+    Merge default CATEGORIES with any custom ones the user created.
+    Default categories always come first, custom ones appended after.
+    """
+    custom = database.get_custom_categories(user_id)
+    # Avoid duplicates in case user created one matching a default name
+    extras = [c for c in custom if c not in CATEGORIES]
+    return CATEGORIES + extras
 
 # ── Helper — load expenses as a pandas DataFrame ──────────────────────────────
 
@@ -50,6 +59,54 @@ def show_add_expense_page() -> None:
     st.header("➕ Add Expense")
 
     user_id = st.session_state["user_id"]
+
+    # ── Custom category manager ───────────────────────────────────
+    with st.expander("➕ Manage custom categories", expanded=False):
+        all_cats = get_all_categories(user_id)
+        custom_cats = database.get_custom_categories(user_id)
+
+        col_input, col_btn = st.columns([3, 1])
+        with col_input:
+            new_cat_name = st.text_input(
+                "New category name",
+                placeholder="e.g. Stocks, Loan repayment, Rent...",
+                key="new_category_input",
+                label_visibility="collapsed"
+            )
+        with col_btn:
+            if st.button("Add", key="add_cat_btn", use_container_width=True):
+                if not new_cat_name.strip():
+                    st.error("Please enter a category name.")
+                elif new_cat_name.strip().title() in CATEGORIES:
+                    st.error(f"'{new_cat_name.strip().title()}' is already a default category.")
+                else:
+                    success = database.add_custom_category(user_id, new_cat_name)
+                    if success:
+                        st.success(f"'{new_cat_name.strip().title()}' added!")
+                        st.rerun()
+                    else:
+                        st.error("Category already exists or couldn't be added.")
+
+        # Show existing custom categories with delete option
+        if custom_cats:
+            st.caption("Your custom categories:")
+            for cat in custom_cats:
+                col_cat, col_del = st.columns([4, 1])
+                with col_cat:
+                    st.markdown(
+                        f"<span style='color:#C8C8E8; font-size:0.88rem;'>• {cat}</span>",
+                        unsafe_allow_html=True
+                    )
+                with col_del:
+                    if st.button("✕", key=f"del_cat_{cat}",
+                                 help=f"Delete {cat}"):
+                        database.delete_custom_category(user_id, cat)
+                        st.rerun()
+        else:
+            st.caption("No custom categories yet.")
+
+    # ── Expense form ──────────────────────────────────────────────
+    all_categories = get_all_categories(user_id)
 
     with st.form("add_expense_form", clear_on_submit=True):
         col1, col2 = st.columns([2, 1])
@@ -87,7 +144,7 @@ def show_add_expense_page() -> None:
         st.markdown("**Select category:**")
         selected_category = st.selectbox(
             "Category",
-            CATEGORIES,
+            all_categories,          # ← uses merged list including custom
             help="Pick the category that fits best"
         )
 
@@ -102,7 +159,6 @@ def show_add_expense_page() -> None:
             st.error("Amount must be greater than zero.")
             return
 
-        # Convert to INR if needed
         amount_inr, used_fallback = convert_to_inr(amount, currency)
 
         if used_fallback and currency != "INR":
@@ -111,7 +167,6 @@ def show_add_expense_page() -> None:
                 "using approximate rates for conversion."
             )
 
-        # Check for anomaly BEFORE saving
         from ml_insights import check_anomaly
         is_anomaly, z_score = check_anomaly(user_id, amount_inr, selected_category)
 
@@ -158,13 +213,14 @@ def show_add_expense_page() -> None:
         st.info("No expenses yet. Add your first one above!")
         return
 
-    recent = df.head(5)[["date", "description", "category", "amount_inr", "currency"]].copy()
+    recent = df.head(5)[["date", "description", "category",
+                          "amount_inr", "currency"]].copy()
     recent["date"]       = recent["date"].dt.strftime("%d %b %Y")
     recent["amount_inr"] = recent["amount_inr"].apply(lambda x: f"₹{x:,.2f}")
-    recent.columns       = ["Date", "Description", "Category", "Amount (INR)", "Currency"]
+    recent.columns       = ["Date", "Description", "Category",
+                             "Amount (INR)", "Currency"]
 
     st.dataframe(recent, use_container_width=True, hide_index=True)
-
 
 # ── My Expenses page ──────────────────────────────────────────────────────────
 
@@ -204,19 +260,21 @@ def show_expenses_page() -> None:
             to_date = st.date_input("To", value=today)
 
     with col2 if preset != "Custom" else st.columns(1)[0]:
+        all_categories = get_all_categories(user_id)
         selected_cats = st.multiselect(
             "Categories",
-            CATEGORIES,
-            default=CATEGORIES,
+            all_categories,
+            default=all_categories,
             help="Unselect categories to hide them"
         )
 
     # ── Load and display ──────────────────────────────────────────
+    all_categories = get_all_categories(user_id)
     df = load_expenses(
         user_id,
         from_date=from_date,
         to_date=to_date,
-        categories=selected_cats if selected_cats else CATEGORIES
+        categories=selected_cats if selected_cats else all_categories
     )
 
     if df.empty:

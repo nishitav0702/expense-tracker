@@ -163,8 +163,10 @@ def show_settings_page() -> None:
     # ── Budget pie chart ──────────────────────────────────────────
     st.subheader("Current budget allocation")
 
+    from expenses import get_all_categories
+    all_categories_for_user = get_all_categories(user_id)
     budget_values = {
-        cat: existing.get(cat, 0.0) for cat in CATEGORIES
+        cat: existing.get(cat, 0.0) for cat in all_categories_for_user
     }
     total_budget = sum(budget_values.values())
 
@@ -236,7 +238,10 @@ def show_settings_page() -> None:
 
         # Two columns for the inputs
         col1, col2 = st.columns(2)
-        for i, category in enumerate(CATEGORIES):
+        from expenses import get_all_categories
+        all_categories = get_all_categories(user_id)
+
+        for i, category in enumerate(all_categories):
             current_limit = existing.get(category, 0.0)
             with col1 if i % 2 == 0 else col2:
                 budgets[category] = st.number_input(

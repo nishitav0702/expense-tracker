@@ -181,7 +181,11 @@ def _show_budget_progress(df: pd.DataFrame, budgets: dict) -> None:
 
     category_totals = df.groupby("category")["amount_inr"].sum()
 
-    for category in CATEGORIES:
+    from expenses import get_all_categories
+    all_cats = get_all_categories(
+        st.session_state.get("user_id", 0)
+    )
+    for category in all_cats:
         limit = budgets.get(category, 0)
         if limit <= 0:
             continue

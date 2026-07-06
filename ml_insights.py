@@ -66,7 +66,9 @@ def engineer_features(user_id: int, month: int, year: int) -> pd.DataFrame:
     budgets = database.get_budgets(user_id, month, year)
 
     rows = []
-    for category in CATEGORIES:
+    from expenses import get_all_categories
+    all_cats = get_all_categories(user_id)
+    for category in all_cats:
         if df.empty:
             spent = 0.0
         else:
@@ -253,7 +255,9 @@ def check_anomaly(user_id: int, amount: float,
 
 def find_blind_spot(user_id: int) -> dict:
     today           = datetime.date.today()
-    overspend_count = {cat: 0 for cat in CATEGORIES}
+    from expenses import get_all_categories
+    all_cats = get_all_categories(user_id)
+    overspend_count = {cat: 0 for cat in all_cats}
     monthly_summary = []
 
     for offset in range(0, 6):
@@ -313,10 +317,13 @@ def _show_spending_trends(user_id: int) -> None:
         )
 
     with col2:
+        from expenses import get_all_categories
+        all_categories = get_all_categories(user_id)
         selected_cats = st.multiselect(
             "Categories",
-            CATEGORIES,
-            default=["Food", "Travel", "Utilities"],
+            all_categories,
+            default=[c for c in ["Food", "Travel", "Utilities"]
+                     if c in all_categories],
             help="Select one or more categories to compare"
         )
 
@@ -621,8 +628,10 @@ def show_ml_insights_page() -> None:
         st.plotly_chart(fig3, use_container_width=True)
 
     # Metric cards
+    from expenses import get_all_categories
+    all_cats_for_user = get_all_categories(user_id)
     cols = st.columns(3)
-    for i, category in enumerate(CATEGORIES):
+    for i, category in enumerate(all_cats_for_user):
         predicted = forecasts.get(category, 0.0)
         limit     = budgets.get(category, 0.0)
 

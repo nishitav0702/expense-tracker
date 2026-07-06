@@ -215,6 +215,49 @@ def get_budgets(user_id: int, month: int, year: int) -> dict:
     conn.close()
     return {row["category"]: row["monthly_limit"] for row in rows}
 
+def get_custom_categories(user_id: int) -> list[str]:
+    """Return list of custom category names created by this user."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT name FROM categories WHERE user_id = ? ORDER BY name",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return [row["name"] for row in rows]
+
+
+def add_custom_category(user_id: int, name: str) -> bool:
+    """
+    Add a custom category for this user.
+    Returns True on success, False if it already exists.
+    """
+    name = name.strip().title()   # normalize — "petrol" → "Petrol"
+    if not name:
+        return False
+    try:
+        conn = get_connection()
+        conn.execute(
+            "INSERT INTO categories (name, user_id) VALUES (?, ?)",
+            (name, user_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def delete_custom_category(user_id: int, name: str) -> bool:
+    """Delete a custom category. Only deletes user-created ones."""
+    conn = get_connection()
+    cursor = conn.execute(
+        "DELETE FROM categories WHERE user_id = ? AND name = ?",
+        (user_id, name)
+    )
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 if __name__ == "__main__":
     init_db()

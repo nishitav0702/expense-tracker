@@ -55,7 +55,8 @@ def _build_spending_context(user_id: int) -> str:
 
     category_totals = df.groupby("category")["amount_inr"].sum()
 
-    for cat in CATEGORIES:
+    from expenses import get_all_categories
+    for cat in get_all_categories(user_id):
         spent  = float(category_totals.get(cat, 0))
         budget = float(budgets.get(cat, 0))
 
