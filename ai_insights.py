@@ -210,8 +210,10 @@ def _show_visual_summary(user_id: int) -> None:
     category_totals = df.groupby("category")["amount_inr"].sum()
 
     # Only show categories that have a budget set
+    from expenses import get_all_categories
+    all_cats = get_all_categories(user_id)
     active_cats = [
-        cat for cat in CATEGORIES
+        cat for cat in all_cats
         if budgets.get(cat, 0) > 0
     ]
 
