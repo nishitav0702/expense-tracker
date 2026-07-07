@@ -6,6 +6,7 @@ import dashboard
 import ml_insights
 import ai_insights
 import export
+import statement_import
 
 from styles.global_css import inject_global_css
 
@@ -98,6 +99,7 @@ else:
         "📊 Dashboard",
         "➕ Add Expense",
         "📋 My Expenses",
+        "📥 Import Statement", 
         "🤖 ML Insights",
         "✨ AI Insights",
         "📁 Export",
@@ -116,6 +118,9 @@ else:
 
     elif page == "📋 My Expenses":
         expenses.show_expenses_page()
+
+    elif page == "📥 Import Statement":
+        statement_import.show_import_page()
 
     elif page == "🤖 ML Insights":
         ml_insights.show_ml_insights_page()

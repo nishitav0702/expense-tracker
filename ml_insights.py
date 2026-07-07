@@ -628,32 +628,33 @@ def show_ml_insights_page() -> None:
         st.plotly_chart(fig3, use_container_width=True)
 
     # Metric cards
-    from expenses import get_all_categories
-    all_cats_for_user = get_all_categories(user_id)
-    cols = st.columns(3)
-    for i, category in enumerate(all_cats_for_user):
-        predicted = forecasts.get(category, 0.0)
-        limit     = budgets.get(category, 0.0)
+    # too redundant hence removed 
+    # from expenses import get_all_categories
+    # all_cats_for_user = get_all_categories(user_id)
+    # cols = st.columns(3)
+    # for i, category in enumerate(all_cats_for_user):
+    #     predicted = forecasts.get(category, 0.0)
+    #     limit     = budgets.get(category, 0.0)
 
-        with cols[i % 3]:
-            if limit > 0:
-                overshoot = predicted - limit
-                delta_str = (
-                    f"+Rs{overshoot:,.0f} over budget"
-                    if overshoot > 0
-                    else f"Rs{abs(overshoot):,.0f} under budget"
-                )
-                delta_col = "inverse" if overshoot > 0 else "normal"
-            else:
-                delta_str = "No budget set"
-                delta_col = "off"
+    #     with cols[i % 3]:
+    #         if limit > 0:
+    #             overshoot = predicted - limit
+    #             delta_str = (
+    #                 f"+Rs{overshoot:,.0f} over budget"
+    #                 if overshoot > 0
+    #                 else f"Rs{abs(overshoot):,.0f} under budget"
+    #             )
+    #             delta_col = "inverse" if overshoot > 0 else "normal"
+    #         else:
+    #             delta_str = "No budget set"
+    #             delta_col = "off"
 
-            st.metric(
-                label=category,
-                value=f"Rs{predicted:,.0f}",
-                delta=delta_str,
-                delta_color=delta_col
-            )
+    #         st.metric(
+    #             label=category,
+    #             value=f"Rs{predicted:,.0f}",
+    #             delta=delta_str,
+    #             delta_color=delta_col
+    #         )
 
     st.divider()
 
