@@ -4,8 +4,10 @@ import datetime
 import database
 from auth import CATEGORIES
 from api_client import CURRENCIES, convert_to_inr
+from streamlit.components.v1 import html
 
-# Consistent colour per category
+# ── Category colours ──────────────────────────────────────────────────────────
+
 CATEGORY_COLOURS = {
     "Food":          "#FF6B6B",
     "Travel":        "#4ECDC4",
@@ -16,24 +18,168 @@ CATEGORY_COLOURS = {
     "Other":         "#B0B0B0",
 }
 
+
+def get_category_colour(category: str) -> str:
+    """Return colour for a category, generating one for custom categories."""
+    if category in CATEGORY_COLOURS:
+        return CATEGORY_COLOURS[category]
+    hash_val = abs(hash(category)) % 360
+    return f"hsl({hash_val}, 60%, 65%)"
+
+
+def render_expense_table(df: pd.DataFrame, max_rows: int = None) -> str:
+    """
+    Render expenses as a styled HTML table with glassmorphism background,
+    category colour pills, and alternating row shading.
+    """
+    if df.empty:
+        return ""
+
+    display = df.copy()
+    if max_rows:
+        display = display.head(max_rows)
+
+    rows_html = ""
+    for i, (_, row) in enumerate(display.iterrows()):
+        bg = "rgba(77,47,178,0.12)" if i % 2 == 0 else "rgba(14,33,160,0.08)"
+
+        try:
+            date_str = pd.to_datetime(row["date"]).strftime("%d %b %Y")
+        except Exception:
+            date_str = str(row["date"])
+
+        cat    = str(row.get("category", "Other"))
+        colour = get_category_colour(cat)
+        cat_pill = (
+            f"<span style='"
+            f"background:{colour}22;"
+            f"border:1px solid {colour}88;"
+            f"color:{colour};"
+            f"font-size:0.75rem;"
+            f"font-weight:600;"
+            f"padding:2px 10px;"
+            f"border-radius:20px;"
+            f"letter-spacing:0.03em;"
+            f"white-space:nowrap;"
+            f"'>{cat}</span>"
+        )
+
+        try:
+            amt = f"&#8377;{float(row.get('amount_inr', 0)):,.2f}"
+        except Exception:
+            amt = str(row.get("amount_inr", ""))
+
+        raw_desc = str(row.get("description", "")).strip()
+        desc = raw_desc if raw_desc else \
+            "<span style='color:#9090B8;font-style:italic;'>—</span>"
+
+        currency = str(row.get("currency", "INR"))
+
+        is_rec = row.get("is_recurring", 0)
+        rec_badge = (
+            "<span style='"
+            "background:rgba(177,83,215,0.2);"
+            "border:1px solid rgba(177,83,215,0.5);"
+            "color:#B153D7;"
+            "font-size:0.7rem;"
+            "padding:1px 7px;"
+            "border-radius:20px;"
+            "margin-left:6px;"
+            "'>&#x1F501;</span>"
+            if is_rec else ""
+        )
+
+        rows_html += f"""
+        <tr style="background:{bg};">
+            <td style="padding:10px 14px; color:#C8C8E8;
+                       font-size:0.85rem; white-space:nowrap;">
+                {date_str}
+            </td>
+            <td style="padding:10px 14px; color:#C8C8E8;
+                       font-size:0.85rem; max-width:220px;
+                       overflow:hidden; text-overflow:ellipsis;
+                       white-space:nowrap;">
+                {desc}{rec_badge}
+            </td>
+            <td style="padding:10px 14px;">{cat_pill}</td>
+            <td style="padding:10px 14px; color:#F0F0FF;
+                       font-family:'Libre Baskerville',Georgia,serif;
+                       font-weight:700; font-size:0.9rem;
+                       text-align:right; white-space:nowrap;">
+                {amt}
+            </td>
+            <td style="padding:10px 14px; color:#9090B8;
+                       font-size:0.8rem; text-align:center;">
+                {currency}
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <div style="
+        background: rgba(14,33,160,0.25);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(177,83,215,0.35);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 8px 32px rgba(10,10,60,0.35);
+        margin-bottom: 1rem;
+    ">
+        <table style="width:100%; border-collapse:collapse;
+                      font-family:Inter,sans-serif;">
+            <thead>
+                <tr style="background:rgba(77,47,178,0.5);
+                           border-bottom:1px solid rgba(177,83,215,0.35);">
+                    <th style="padding:10px 14px; text-align:left;
+                               font-size:0.75rem; font-weight:600;
+                               text-transform:uppercase;
+                               letter-spacing:0.07em; color:#9090B8;">
+                        Date
+                    </th>
+                    <th style="padding:10px 14px; text-align:left;
+                               font-size:0.75rem; font-weight:600;
+                               text-transform:uppercase;
+                               letter-spacing:0.07em; color:#9090B8;">
+                        Description
+                    </th>
+                    <th style="padding:10px 14px; text-align:left;
+                               font-size:0.75rem; font-weight:600;
+                               text-transform:uppercase;
+                               letter-spacing:0.07em; color:#9090B8;">
+                        Category
+                    </th>
+                    <th style="padding:10px 14px; text-align:right;
+                               font-size:0.75rem; font-weight:600;
+                               text-transform:uppercase;
+                               letter-spacing:0.07em; color:#9090B8;">
+                        Amount
+                    </th>
+                    <th style="padding:10px 14px; text-align:center;
+                               font-size:0.75rem; font-weight:600;
+                               text-transform:uppercase;
+                               letter-spacing:0.07em; color:#9090B8;">
+                        Currency
+                    </th>
+                </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+    </div>
+    """
+
+
 def get_all_categories(user_id: int) -> list[str]:
-    """
-    Merge default CATEGORIES with any custom ones the user created.
-    Default categories always come first, custom ones appended after.
-    """
+    """Merge default CATEGORIES with any custom ones the user created."""
     custom = database.get_custom_categories(user_id)
-    # Avoid duplicates in case user created one matching a default name
     extras = [c for c in custom if c not in CATEGORIES]
     return CATEGORIES + extras
 
-# ── Helper — load expenses as a pandas DataFrame ──────────────────────────────
+
+# ── Helper — load expenses as DataFrame ──────────────────────────────────────
 
 def load_expenses(user_id: int, from_date=None, to_date=None,
                   categories=None) -> pd.DataFrame:
-    """
-    Fetch expenses from SQLite and return as a DataFrame.
-    Empty DataFrame if no expenses yet.
-    """
     rows = database.get_expenses(
         user_id,
         from_date=str(from_date) if from_date else None,
@@ -62,7 +208,6 @@ def show_add_expense_page() -> None:
 
     # ── Custom category manager ───────────────────────────────────
     with st.expander("➕ Manage custom categories", expanded=False):
-        all_cats = get_all_categories(user_id)
         custom_cats = database.get_custom_categories(user_id)
 
         col_input, col_btn = st.columns([3, 1])
@@ -78,23 +223,33 @@ def show_add_expense_page() -> None:
                 if not new_cat_name.strip():
                     st.error("Please enter a category name.")
                 elif new_cat_name.strip().title() in CATEGORIES:
-                    st.error(f"'{new_cat_name.strip().title()}' is already a default category.")
+                    st.error(
+                        f"'{new_cat_name.strip().title()}' "
+                        f"is already a default category."
+                    )
                 else:
-                    success = database.add_custom_category(user_id, new_cat_name)
+                    success = database.add_custom_category(
+                        user_id, new_cat_name
+                    )
                     if success:
-                        st.success(f"'{new_cat_name.strip().title()}' added!")
+                        st.success(
+                            f"'{new_cat_name.strip().title()}' added!"
+                        )
                         st.rerun()
                     else:
-                        st.error("Category already exists or couldn't be added.")
+                        st.error(
+                            "Category already exists or couldn't be added."
+                        )
 
-        # Show existing custom categories with delete option
         if custom_cats:
             st.caption("Your custom categories:")
             for cat in custom_cats:
                 col_cat, col_del = st.columns([4, 1])
                 with col_cat:
+                    colour = get_category_colour(cat)
                     st.markdown(
-                        f"<span style='color:#C8C8E8; font-size:0.88rem;'>• {cat}</span>",
+                        f"<span style='color:{colour}; "
+                        f"font-size:0.88rem;'>● {cat}</span>",
                         unsafe_allow_html=True
                     )
                 with col_del:
@@ -144,7 +299,7 @@ def show_add_expense_page() -> None:
         st.markdown("**Select category:**")
         selected_category = st.selectbox(
             "Category",
-            all_categories,          # ← uses merged list including custom
+            all_categories,
             help="Pick the category that fits best"
         )
 
@@ -168,7 +323,9 @@ def show_add_expense_page() -> None:
             )
 
         from ml_insights import check_anomaly
-        is_anomaly, z_score = check_anomaly(user_id, amount_inr, selected_category)
+        is_anomaly, z_score = check_anomaly(
+            user_id, amount_inr, selected_category
+        )
 
         database.add_expense(
             user_id=user_id,
@@ -184,7 +341,8 @@ def show_add_expense_page() -> None:
         if currency != "INR":
             st.success(
                 f"✅ {currency} {amount:,.2f} → ₹{amount_inr:,.2f} added "
-                f"under **{selected_category}** on {date.strftime('%d %b %Y')}"
+                f"under **{selected_category}** "
+                f"on {date.strftime('%d %b %Y')}"
             )
         else:
             st.success(
@@ -193,7 +351,9 @@ def show_add_expense_page() -> None:
             )
 
         if is_anomaly:
-            cat_expenses = database.get_expenses(user_id, categories=[selected_category])
+            cat_expenses = database.get_expenses(
+                user_id, categories=[selected_category]
+            )
             if cat_expenses:
                 amounts = [r["amount_inr"] for r in cat_expenses]
                 avg = sum(amounts) / len(amounts)
@@ -213,14 +373,12 @@ def show_add_expense_page() -> None:
         st.info("No expenses yet. Add your first one above!")
         return
 
-    recent = df.head(5)[["date", "description", "category",
-                          "amount_inr", "currency"]].copy()
-    recent["date"]       = recent["date"].dt.strftime("%d %b %Y")
-    recent["amount_inr"] = recent["amount_inr"].apply(lambda x: f"₹{x:,.2f}")
-    recent.columns       = ["Date", "Description", "Category",
-                             "Amount (INR)", "Currency"]
+    html(
+    render_expense_table(df, max_rows=5),
+    height=350,
+    scrolling=False,
+)
 
-    st.dataframe(recent, use_container_width=True, hide_index=True)
 
 # ── My Expenses page ──────────────────────────────────────────────────────────
 
@@ -268,7 +426,7 @@ def show_expenses_page() -> None:
             help="Unselect categories to hide them"
         )
 
-    # ── Load and display ──────────────────────────────────────────
+    # ── Load data ─────────────────────────────────────────────────
     all_categories = get_all_categories(user_id)
     df = load_expenses(
         user_id,
@@ -281,32 +439,25 @@ def show_expenses_page() -> None:
         st.info("No expenses found for the selected filters.")
         return
 
-    # ── Summary row ───────────────────────────────────────────────
+    # ── Summary metrics ───────────────────────────────────────────
     total = df["amount_inr"].sum()
     count = len(df)
     avg   = df["amount_inr"].mean()
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Total spent", f"₹{total:,.2f}")
+    m1.metric("Total spent",  f"₹{total:,.2f}")
     m2.metric("Transactions", count)
-    m3.metric("Average", f"₹{avg:,.2f}")
+    m3.metric("Average",      f"₹{avg:,.2f}")
 
     st.divider()
 
-    # ── Expense table ─────────────────────────────────────────────
+    # ── Styled transactions table ─────────────────────────────────
     st.subheader("Transactions")
-
-    display_df = df[["date", "description", "category",
-                      "amount_inr", "currency", "is_recurring"]].copy()
-    display_df["date"]         = display_df["date"].dt.strftime("%d %b %Y")
-    display_df["amount_inr"]   = display_df["amount_inr"].apply(lambda x: f"₹{x:,.2f}")
-    display_df["is_recurring"] = display_df["is_recurring"].apply(
-        lambda x: "🔁 Yes" if x else ""
-    )
-    display_df.columns = ["Date", "Description", "Category",
-                           "Amount (₹)", "Currency", "Recurring"]
-
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    html(
+    render_expense_table(df),
+    height=500,
+    scrolling=False,
+)
 
     # ── Edit / Delete ─────────────────────────────────────────────
     st.divider()
@@ -316,7 +467,8 @@ def show_expenses_page() -> None:
     expense_labels = {
         row["id"]: (
             f"{pd.to_datetime(row['date']).strftime('%d %b')}  |  "
-            f"{row['category']}  |  ₹{row['amount_inr']:,.0f}  |  "
+            f"{row['category']}  |  "
+            f"₹{row['amount_inr']:,.0f}  |  "
             f"{row['description'] or '(no description)'}"
         )
         for _, row in df.iterrows()
@@ -330,6 +482,7 @@ def show_expenses_page() -> None:
 
     if selected_id:
         selected_row = df[df["id"] == selected_id].iloc[0]
+        all_cats_for_edit = get_all_categories(user_id)
 
         tab_edit, tab_delete = st.tabs(["✏️ Edit", "🗑️ Delete"])
 
@@ -354,9 +507,11 @@ def show_expenses_page() -> None:
                     )
                     new_cat = st.selectbox(
                         "Category",
-                        CATEGORIES,
-                        index=CATEGORIES.index(selected_row["category"])
-                        if selected_row["category"] in CATEGORIES else 0
+                        all_cats_for_edit,
+                        index=all_cats_for_edit.index(
+                            selected_row["category"]
+                        ) if selected_row["category"]
+                        in all_cats_for_edit else 0
                     )
                     new_currency = st.selectbox(
                         "Currency",
@@ -364,7 +519,9 @@ def show_expenses_page() -> None:
                         index=CURRENCIES.index(selected_row["currency"])
                         if selected_row["currency"] in CURRENCIES else 0
                     )
-                save_edit = st.form_submit_button("Save changes", type="primary")
+                save_edit = st.form_submit_button(
+                    "Save changes", type="primary"
+                )
 
             if save_edit:
                 new_amount_inr, _ = convert_to_inr(new_amount, new_currency)
@@ -386,7 +543,8 @@ def show_expenses_page() -> None:
 
         with tab_delete:
             st.warning(
-                f"You are about to delete: **{selected_row['category']}** — "
+                f"You are about to delete: "
+                f"**{selected_row['category']}** — "
                 f"₹{selected_row['amount_inr']:,.2f} on "
                 f"{pd.to_datetime(selected_row['date']).strftime('%d %b %Y')}"
             )

@@ -167,7 +167,10 @@ def _show_pie_chart(df: pd.DataFrame) -> None:
     fig.update_layout(
         showlegend=True,
         margin=dict(t=20, b=20, l=0, r=0),
-        height=320
+        height=320,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#F0F0FF")
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -232,7 +235,18 @@ def _show_line_chart(df: pd.DataFrame,
     fig.update_layout(
         margin=dict(t=20, b=20, l=0, r=0),
         height=280,
-        hovermode="x unified"
+        hovermode="x unified",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#F0F0FF"),
+        xaxis=dict(
+            gridcolor="rgba(177,83,215,0.15)",
+            color="#9090B8"
+        ),
+        yaxis=dict(
+            gridcolor="rgba(177,83,215,0.15)",
+            color="#9090B8"
+        )
     )
     fig.update_traces(hovertemplate="₹%{y:,.0f}")
     st.plotly_chart(fig, use_container_width=True)
@@ -278,7 +292,23 @@ def _show_comparison_chart(df_this: pd.DataFrame,
     fig.update_layout(
         margin=dict(t=20, b=20, l=0, r=0),
         height=320,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02)
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            font=dict(color="#F0F0FF")
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#F0F0FF"),
+        xaxis=dict(
+            gridcolor="rgba(177,83,215,0.15)",
+            color="#9090B8"
+        ),
+        yaxis=dict(
+            gridcolor="rgba(177,83,215,0.15)",
+            color="#9090B8"
+        )
     )
     fig.update_traces(hovertemplate="<b>%{x}</b><br>₹%{y:,.0f}")
     st.plotly_chart(fig, use_container_width=True)

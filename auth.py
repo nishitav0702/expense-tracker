@@ -194,10 +194,13 @@ def show_settings_page() -> None:
                 hovertemplate="<b>%{label}</b><br>Rs%{value:,.0f}<br>%{percent}"
             )
             fig.update_layout(
-                showlegend=False,
-                margin=dict(t=10, b=10, l=0, r=0),
-                height=280,
-            )
+        showlegend=False,
+        margin=dict(t=10, b=10, l=0, r=0),
+        height=280,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#F0F0FF")
+    )
             st.plotly_chart(fig, use_container_width=True)
 
         with col_summary:

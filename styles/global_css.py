@@ -2,6 +2,7 @@ import streamlit as st
 import base64
 import os
 
+
 # FIX 1: Native control to force the sidebar open. 
 # This MUST be the absolute first Streamlit command in your script.
 st.set_page_config(initial_sidebar_state="expanded")
