@@ -175,68 +175,136 @@ def _parse_sbi(pdf_path) -> pd.DataFrame:
 
 def _parse_icici(pdf_path) -> pd.DataFrame:
     """
-    Parse ICICI bank statement PDF.
-    Columns: Date | Transaction Remarks | Amount (INR) | Dr/Cr | Balance
+    Parse real ICICI bank statement PDF.
+
+    ICICI renders the header as a table but transactions as raw text.
+    extract_tables() only gets the header row — transactions must be
+    parsed from extract_text() output.
+
+    Real format per line:
+    S.No  DD.MM.YYYY  [Cheque]  Description  [Withdrawal]  [Deposit]  Balance
+
+    Example raw text line:
+    1 21.11.2025 502.95 16938.54
+    with description on the line above or below.
     """
     rows = []
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                for row in table:
-                    if not row or len(row) < 4:
+            text = page.extract_text()
+            if not text:
+                continue
+
+            lines = text.split("\n")
+
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+
+                # Match a transaction line:
+                # starts with a number (S.No), followed by a date DD.MM.YYYY
+                # Pattern: digit(s)  DD.MM.YYYY  ...amounts...
+                match = re.match(
+                    r"^(\d+)\s+"           # S.No
+                    r"(\d{2}\.\d{2}\.\d{4})\s+"  # Date DD.MM.YYYY
+                    r"([\d,]+\.?\d*)\s+"   # First amount
+                    r"([\d,]+\.?\d*)$",    # Second amount (balance or deposit)
+                    line
+                )
+
+                if match:
+                    date_str      = match.group(2)
+                    amount_str    = match.group(3)
+                    balance_str   = match.group(4)
+
+                    # Description is on the line BEFORE the transaction line
+                    description = ""
+                    if i > 0:
+                        prev = lines[i - 1].strip()
+                        # Skip if previous line looks like a header or is empty
+                        if prev and not re.match(
+                            r"^\d+$|^S No|^Transaction|^Withdrawal|^Deposit|^Balance",
+                            prev, re.IGNORECASE
+                        ):
+                            description = prev
+
+                    date = _parse_date(date_str.replace(".", "/"))
+                    if not date:
+                        i += 1
                         continue
 
-                    if row[0] and "date" in str(row[0]).lower():
+                    amount_clean = _clean_amount(amount_str)
+                    if amount_clean and amount_clean > 0:
+                        rows.append({
+                            "date":        date,
+                            "description": description or "ICICI Transaction",
+                            "amount":      amount_clean,
+                            "type":        "debit"
+                        })
+
+                    i += 1
+                    continue
+
+                # Also handle 3-amount lines: amount  deposit  balance
+                # when there's a withdrawal AND deposit column
+                match3 = re.match(
+                    r"^(\d+)\s+"
+                    r"(\d{2}\.\d{2}\.\d{4})\s+"
+                    r"([\d,]+\.?\d*)\s+"
+                    r"([\d,]+\.?\d*)\s+"
+                    r"([\d,]+\.?\d*)$",
+                    line
+                )
+
+                if match3:
+                    date_str     = match3.group(2)
+                    withdrawal   = match3.group(3)
+                    deposit      = match3.group(4)
+                    balance      = match3.group(5)
+
+                    description = ""
+                    if i > 0:
+                        prev = lines[i - 1].strip()
+                        if prev and not re.match(
+                            r"^\d+$|^S No|^Transaction|^Withdrawal|^Deposit|^Balance",
+                            prev, re.IGNORECASE
+                        ):
+                            description = prev
+
+                    date = _parse_date(date_str.replace(".", "/"))
+                    if not date:
+                        i += 1
                         continue
 
-                    try:
-                        date_str    = str(row[0]).strip()
-                        description = str(row[1]).strip()
-                        amount_str  = str(row[2]).strip()
-                        dr_cr       = str(row[3]).strip().upper()
+                    # Only import withdrawals
+                    withdrawal_clean = _clean_amount(withdrawal)
+                    if withdrawal_clean and withdrawal_clean > 0:
+                        rows.append({
+                            "date":        date,
+                            "description": description or "ICICI Transaction",
+                            "amount":      withdrawal_clean,
+                            "type":        "debit"
+                        })
 
-                        date = _parse_date(date_str)
-                        if not date:
-                            continue
-
-                        # ICICI marks debits as "DR"
-                        if "DR" not in dr_cr:
-                            continue
-
-                        amount_clean = _clean_amount(amount_str)
-                        if amount_clean and amount_clean > 0:
-                            rows.append({
-                                "date":        date,
-                                "description": description,
-                                "amount":      amount_clean,
-                                "type":        "debit"
-                            })
-
-                    except (IndexError, ValueError):
-                        continue
+                i += 1
 
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=["date", "description", "amount", "type"]
     )
-
-
 # ── Date and amount helpers ───────────────────────────────────────────────────
 
 def _parse_date(date_str: str) -> datetime.date | None:
-    """
-    Try multiple Indian bank date formats.
-    Returns a datetime.date or None if unparseable.
-    """
     formats = [
-        "%d/%m/%y",    # HDFC: 15/06/25
-        "%d/%m/%Y",    # 15/06/2025
-        "%d-%m-%Y",    # 15-06-2025
-        "%d-%m-%y",    # 15-06-25
-        "%d %b %Y",    # 15 Jun 2025
-        "%d %b %y",    # 15 Jun 25
-        "%Y-%m-%d",    # ISO format
+        "%d/%m/%y",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d-%m-%y",
+        "%d.%m.%Y",    # ← ICICI uses dots: 21.11.2025
+        "%d.%m.%y",
+        "%d %b %Y",
+        "%d %b %y",
+        "%Y-%m-%d",
     ]
     clean = date_str.strip().replace("\n", " ")
     for fmt in formats:
@@ -245,7 +313,6 @@ def _parse_date(date_str: str) -> datetime.date | None:
         except ValueError:
             continue
     return None
-
 
 def _clean_amount(amount_str: str) -> float | None:
     """
