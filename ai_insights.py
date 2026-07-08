@@ -421,14 +421,35 @@ def show_ai_page() -> None:
         return
 
     # ── Refresh button ────────────────────────────────────────────
-    col_refresh, _ = st.columns([1, 4])
-    with col_refresh:
-        if st.button("🔄 Refresh insights",
-                     help="Clear cache and fetch fresh AI insights"):
-            for key in [f"ai_summary_{user_id}", f"ai_tips_{user_id}"]:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+    # ── Refresh button — right aligned, styled ────────────────────
+    _, col_btn = st.columns([4, 1])
+    with col_btn:
+        refresh = st.button(
+            "🔄 Refresh",
+            help="Clear cache and fetch fresh AI insights",
+            use_container_width=True
+        )
+    if refresh:
+        for key in [f"ai_summary_{user_id}", f"ai_tips_{user_id}"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+
+    st.markdown(
+        """
+        <div style="
+            font-family: Inter, sans-serif;
+            font-size: 0.78rem;
+            color: #9090B8;
+            text-align: right;
+            margin-top: -12px;
+            margin-bottom: 16px;
+        ">
+            Insights are cached — refresh to fetch latest
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     # ── Section 1 — Visual monthly summary ───────────────────────
     st.subheader("📊 Monthly summary")

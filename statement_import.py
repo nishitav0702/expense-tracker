@@ -470,7 +470,10 @@ def show_import_page() -> None:
             for idx in cat_rows.index:
                 row      = edited_df.loc[idx]
                 col_chk, col_date, col_desc, col_amt, col_cat = \
-                    st.columns([0.5, 1.2, 3, 1.2, 1.8])
+                    st.columns([0.5, 1.5, 2.5, 1.2, 1.8])
+
+                col_chk, col_date, col_desc, col_amt, col_cat = \
+                    st.columns([0.5, 1.5, 2.5, 1.2, 1.8])
 
                 with col_chk:
                     include[idx] = st.checkbox(
@@ -480,7 +483,16 @@ def show_import_page() -> None:
                         label_visibility="collapsed"
                     )
                 with col_date:
-                    st.caption(str(row["date"]))
+                    # ← date is now editable, not just a caption
+                    new_date = st.date_input(
+                        "",
+                        value=row["date"] if isinstance(
+                            row["date"], datetime.date
+                        ) else datetime.date.today(),
+                        key=f"date_{idx}",
+                        label_visibility="collapsed"
+                    )
+                    edited_df.at[idx, "date"] = new_date
                 with col_desc:
                     st.caption(row["description"][:50])
                 with col_amt:
