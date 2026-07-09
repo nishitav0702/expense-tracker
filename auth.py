@@ -21,9 +21,9 @@ COLOUR_MAP = {
 # ── Password utilities ────────────────────────────────────────────────────────
 
 def hash_password(plain_password: str) -> str:
-    password_bytes = plain_password.encode("utf-8")
+    password_bytes = plain_password.encode("utf-8") #hello -> b'hello'
     hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
-    return hashed.decode("utf-8")
+    return hashed.decode("utf-8") #reverse of encode
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -42,8 +42,8 @@ def init_session():
         "username":  None,
         "email":     None,
     }
-    for key, value in defaults.items():
-        if key not in st.session_state:
+    for key, value in defaults.items(): 
+        if key not in st.session_state: #ensures we stay logged in on every rerun
             st.session_state[key] = value
 
 
@@ -104,7 +104,7 @@ def show_register_form() -> None:
 # ── Login ─────────────────────────────────────────────────────────────────────
 
 def show_login_form() -> None:
-    st.title("Welcome back to SpendWise 👋")
+    st.title("Welcome back to SpendWise")
 
     with st.form("login_form"):
         email    = st.text_input("Email address")
@@ -119,11 +119,11 @@ def show_login_form() -> None:
         user = database.get_user_by_email(email)
 
         if user is None:
-            st.error("Invalid email or password.")
+            st.error("Invalid email.")
             return
 
         if not verify_password(password, user["password"]):
-            st.error("Invalid email or password.")
+            st.error("Invalid password.")
             return
 
         login_user(user)
@@ -133,10 +133,10 @@ def show_login_form() -> None:
 # ── Settings page ─────────────────────────────────────────────────────────────
 
 def show_settings_page() -> None:
-    st.header("⚙️ Settings")
+    st.header("Settings")
 
     user_id = st.session_state["user_id"]
-    today   = datetime.datetime.now()
+    today   = datetime.datetime.now() #helps fetch out month by today.month, today.year
 
     # ── Month scope selector ──────────────────────────────────────
     st.subheader("Budget scope")
@@ -165,7 +165,7 @@ def show_settings_page() -> None:
 
     from expenses import get_all_categories
     all_categories_for_user = get_all_categories(user_id)
-    budget_values = {
+    budget_values = { #dict comprehension
         cat: existing.get(cat, 0.0) for cat in all_categories_for_user
     }
     total_budget = sum(budget_values.values())
