@@ -80,7 +80,7 @@ else:
                 -webkit-text-fill-color: transparent;
                 background-clip: text;
                 margin-bottom: 4px;
-            ">SpendWise 💸</div>
+            ">SpendWise</div>
             <div style="
                 font-family: Inter, sans-serif;
                 font-size: 0.78rem;
@@ -96,40 +96,40 @@ else:
     st.sidebar.divider()
 
     page = st.sidebar.radio("Navigate", [
-        "📊 Dashboard",
-        "➕ Add Expense",
-        "📋 My Expenses",
-        "📥 Import Statement", 
-        "🤖 ML Insights",
-        "✨ AI Insights",
-        "📁 Export",
-        "⚙️ Settings"
+        "Dashboard",
+        "Add Expense",
+        "My Expenses",
+        "Import Statement", 
+        "ML Insights",
+        "AI Insights",
+        "Export",
+        "Settings"
     ])
 
     st.sidebar.divider()
     if st.sidebar.button("Logout", use_container_width=True):
         auth.logout_user()
 
-    if page == "📊 Dashboard":
+    if page == "Dashboard":
         dashboard.show_dashboard()
 
-    elif page == "➕ Add Expense":
+    elif page == "Add Expense":
         expenses.show_add_expense_page()
 
-    elif page == "📋 My Expenses":
+    elif page == "My Expenses":
         expenses.show_expenses_page()
 
-    elif page == "📥 Import Statement":
+    elif page == "Import Statement":
         statement_import.show_import_page()
 
-    elif page == "🤖 ML Insights":
+    elif page == "ML Insights":
         ml_insights.show_ml_insights_page()
 
-    elif page == "✨ AI Insights":
+    elif page == "AI Insights":
         ai_insights.show_ai_page()
 
-    elif page == "📁 Export":
+    elif page == "Export":
         export.show_export_page()
 
-    elif page == "⚙️ Settings":
+    elif page == "Settings":
         auth.show_settings_page()
