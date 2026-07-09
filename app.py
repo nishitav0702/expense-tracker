@@ -44,7 +44,7 @@ if not auth.is_logged_in():
                 -webkit-text-fill-color: transparent;
                 background-clip: text;
                 margin-bottom: 0.4rem;
-            ">SpendWise 💸</div>
+            ">SpendWise </div>
             <div style="
                 font-family: Inter, sans-serif;
                 font-size: 0.82rem;
